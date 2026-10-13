@@ -52,6 +52,8 @@ pub struct ImportedFile {
     pub bytes: Vec<u8>,
 }
 pub type OpenAsyncFn = Box<dyn FnMut(ImportRequest)>;
+/// A cloud host requests publication; the receipt owns the native saved baseline.
+pub type HostSaveFn = Box<dyn FnMut(u64, u64, &str, Option<&str>, &Value) -> Result<(), String>>;
 pub type DownloadFn = Box<dyn FnMut(&str, &[u8])>;
 /// Files delivered asynchronously with their original operation and document identity.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<ImportedFile>>>;
@@ -59,6 +61,8 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<ImportedFile>>>;
 /// Platform services injected by the host (desktop or web).
 #[derive(Default)]
 pub struct Services {
+    /// Narrow host publication seam. Never marks a document saved synchronously.
+    pub host_save_request: Option<HostSaveFn>,
     /// Open-file dialog for a purpose (`open`, `place`) → path.
     pub pick_open: Option<PickFn>,
     /// Save dialog with a suggested name → path.
@@ -468,6 +472,8 @@ pub struct Perf {
 }
 
 pub struct DesignApp {
+    /// A native close-and-save intent waits for the exact publication receipt.
+    pub host_pending_close: Option<u64>,
     pending_pdf: Option<ImportedFile>,
     pub session: Session,
     pub ui: UiState,
@@ -517,6 +523,7 @@ impl DesignApp {
         // The font menus and the first file opened need the installed fonts: catalog them now.
         designcraft_fonts::FontDb::global().scan_in_background();
         DesignApp {
+            host_pending_close: None,
             pending_pdf: None,
             session,
             ui: UiState::default(),
@@ -587,6 +594,17 @@ impl DesignApp {
 
     /// THE entry point for every action (menus, shortcuts, palette, panels, control channel).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if self.services.host_save_request.is_some() {
+            let mode = match id {
+                "app.save" | "file.save" => Some("save"),
+                "app.saveDialog" | "file.saveAs" => Some("saveAs"),
+                "app.saveCopyDialog" | "file.saveACopy" => Some("saveCopy"),
+                _ => None,
+            };
+            if let Some(mode) = mode {
+                return self.host_request_save(mode, None, &params);
+            }
+        }
         if let Some(r) = menus::run_ui(self, id, &params) {
             return r;
         }
@@ -596,6 +614,25 @@ impl DesignApp {
             self.status(e.clone());
         }
         r
+    }
+
+    /// The host owns chooser/publication, while the native Session keeps editing and dirty state.
+    pub fn host_request_save(&mut self, mode: &str, format: Option<&str>, params: &Value) -> Result<Value, String> {
+        let doc = self.session.active().ok_or("no document")?;
+        let (uid, revision) = (doc.uid, doc.revision);
+        let request = self.services.host_save_request.as_mut().ok_or("no publication host")?;
+        request(uid, revision, mode, format, params)?;
+        Ok(Value::Null)
+    }
+
+    pub fn host_publication_completed(&mut self, uid: u64) {
+        if self.host_pending_close != Some(uid) {
+            return;
+        }
+        self.host_pending_close = None;
+        if let Some(index) = self.session.documents().iter().position(|d| d.uid == uid && !d.is_dirty()) {
+            self.session.close_document(index);
+        }
     }
 
     /// Handle requests produced by tools/commands (dialogs, view changes, file pickers).
@@ -695,6 +732,13 @@ impl DesignApp {
         let Some(inbox) = self.services.inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for file in files {
+            if self.services.host_save_request.is_some()
+                && file.request.purpose != "open"
+                && file.request.target != self.session.active().map(|d| d.uid)
+            {
+                self.status(format!("{}: import cancelled because the originating document changed or closed", file.name));
+                continue;
+            }
             if self.ui.dialog.is_some() {
                 self.status(format!("{}: import cancelled while a dialog is open; choose the file again", file.name));
                 continue;

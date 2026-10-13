@@ -392,6 +392,38 @@ impl Session {
         self.guarded(id, |s| s.execute_unguarded(id, params))
     }
 
+    /// A receipt moves only the saved allocation, without activating or changing document tabs.
+    pub fn host_acknowledge(&mut self, uid: u64, revision: u64, published: Arc<Document>, name: Option<&str>) {
+        if let Some(state) = self.docs.iter_mut().find(|d| d.uid == uid) {
+            state.saved_doc = published;
+            state.saved_revision = revision;
+            if let Some(name) = name {
+                state.path = Some(name.to_string());
+            }
+        }
+    }
+
+    /// Host export of an existing document, using the same native command/writer and Session.
+    /// This does not activate another tab, journal an edit or alter data-merge preview state.
+    pub fn host_export(&mut self, uid: u64, id: &str, params: &Value) -> Result<Value> {
+        if !matches!(id, "file.exportPdf" | "file.exportIdml" | "file.exportEpub" | "file.exportFixedEpub") {
+            return Err(EngineError::Other("unsupported host export".into()));
+        }
+        let index = self.docs.iter().position(|d| d.uid == uid).ok_or(EngineError::NoDocument)?;
+        if self.docs.get(index).is_some_and(|d| d.preview_stash.is_some()) {
+            return Err(EngineError::Other("End Data Merge Preview before exporting".into()));
+        }
+        let previous = self.active;
+        self.active = Some(index);
+        let output = self.guarded(id, |s| {
+            let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.into()))?;
+            (spec.enabled)(s).map_err(|e| EngineError::Disabled(id.into(), e))?;
+            (spec.run)(s, params)
+        });
+        self.active = previous;
+        output
+    }
+
     fn execute_unguarded(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.into()))?;
         if let Err(e) = (spec.enabled)(self) {

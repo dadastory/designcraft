@@ -1975,6 +1975,9 @@ pub fn confirm(app: &mut DesignApp) -> Result<Value, String> {
             if !title.is_empty() {
                 params["title"] = json!(title);
             }
+            if app.services.host_save_request.is_some() {
+                return crate::menus::export_pdf(app, &params);
+            }
             let name = if title.is_empty() { "Export.pdf".to_string() } else { format!("{title}.pdf") };
             match app.services.pick_save.as_mut().and_then(|f| f(&name)) {
                 Some(path) => {
@@ -2082,6 +2085,9 @@ pub fn confirm(app: &mut DesignApp) -> Result<Value, String> {
             let Some(i) = index(app) else { return Ok(Value::Null) };
             if !d.b("discard") {
                 app.run("file.activate", json!({"index": i}))?;
+                if app.services.host_save_request.is_some() {
+                    app.host_pending_close = uid;
+                }
                 app.run("app.save", json!({}))?;
                 // Still unsaved: the save was cancelled (no file chosen). Keep the document open.
                 if app.session.documents().get(i).is_none_or(|doc| doc.is_dirty()) {

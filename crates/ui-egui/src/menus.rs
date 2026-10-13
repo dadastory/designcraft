@@ -158,12 +158,6 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
         "{on?: bool, at?: [x, y] (points from the canvas's top-left)} — the Contextual Task Bar stays where it is (or at `at`) instead of following the selection; with neither, toggles",
     ),
     ("window.taskBarReset", "Reset Bar Position", None, "{} — the Contextual Task Bar follows the selection again, under it"),
-    ("help.discord", "Join the ArtCraft Discord…", None, "{} — opens https://discord.gg/artcraft in the browser"),
-    ("help.appPage", "DesignCraft Website…", None, "{} — opens https://getartcraft.com/apps/designcraft"),
-    ("help.github", "DesignCraft on GitHub…", None, "{} — opens https://github.com/storytold/designcraft"),
-    ("help.issues", "Report an Issue…", None, "{} — opens the GitHub issue tracker"),
-    ("help.website", "ArtCraft Website…", None, "{} — opens https://getartcraft.com"),
-    ("help.app", "ArtCraft App Page…", None, "{app} — opens https://getartcraft.com/apps/{app} (e.g. photocraft)"),
     (
         "help.about",
         "About DesignCraft",
@@ -700,21 +694,7 @@ pub const MENUS: &[(&str, &[&str])] = &[
             "ui:window.brightness",
         ],
     ),
-    (
-        "Help",
-        &[
-            "ui:help.discord",
-            "-",
-            "ui:help.appPage",
-            "ui:help.github",
-            "ui:help.issues",
-            "ui:help.website",
-            "-",
-            "cmd:file.newSample",
-            "-",
-            "ui:help.about",
-        ],
-    ),
+    ("Help", &["cmd:file.newSample", "-", "ui:help.about"]),
 ];
 
 pub fn ui_label(id: &str) -> Option<(&'static str, Option<&'static str>)> {
@@ -1490,6 +1470,13 @@ fn download_document(app: &mut DesignApp) -> Result<Value, String> {
 }
 
 fn export_png(app: &mut DesignApp, p: &Value) -> Result<Value, String> {
+    if app.services.host_save_request.is_some() {
+        let state = app.session.active().ok_or("no document")?;
+        let page = crate::control::page_index(p, crate::canvas::current_page(app).unwrap_or(0), state.doc.page_count())?;
+        let mut options = if p.is_object() { p.clone() } else { json!({}) };
+        options["page"] = json!(page);
+        return app.host_request_save("saveCopy", Some("png"), &options);
+    }
     let st = app.session.active().ok_or("no document")?;
     let page = crate::control::page_index(p, crate::canvas::current_page(app).unwrap_or(0), st.doc.page_count())?;
     let scale = p.get("scale").and_then(Value::as_f64).unwrap_or(2.0);
@@ -1522,6 +1509,9 @@ fn export_png(app: &mut DesignApp, p: &Value) -> Result<Value, String> {
 /// File › Export IDML…: ask for a path, export through `file.exportIdml` and write the bytes with
 /// the platform writer (a download on the web).
 fn export_idml(app: &mut DesignApp, p: &Value) -> Result<Value, String> {
+    if app.services.host_save_request.is_some() {
+        return app.host_request_save("saveCopy", Some("idml"), p);
+    }
     let st = app.session.active().ok_or("no document")?;
     let path = match p.get("path").and_then(Value::as_str) {
         Some(s) => Some(s.to_string()),
@@ -1542,6 +1532,13 @@ fn export_idml(app: &mut DesignApp, p: &Value) -> Result<Value, String> {
 /// Export EPUB / Text: ask for a path (default extension `ext`), run `cmd` without one and write
 /// what it returns (`base64` or `text`) with the platform writer.
 fn export_bytes(app: &mut DesignApp, p: &Value, ext: &str, cmd: &str) -> Result<Value, String> {
+    if app.services.host_save_request.is_some() {
+        let mut options = if p.is_object() { p.clone() } else { json!({}) };
+        if cmd == "file.exportFixedEpub" {
+            options["fixedLayout"] = json!(true);
+        }
+        return app.host_request_save("saveCopy", Some(ext), &options);
+    }
     let st = app.session.active().ok_or("no document")?;
     let path = match p.get("path").and_then(Value::as_str) {
         Some(s) => Some(s.to_string()),
@@ -1570,6 +1567,18 @@ fn export_bytes(app: &mut DesignApp, p: &Value, ext: &str, cmd: &str) -> Result<
 /// File › Export PDF…: ask for a path, export through `file.exportPdf` and write the bytes with the
 /// platform writer (a download on the web).
 pub(crate) fn export_pdf(app: &mut DesignApp, p: &Value) -> Result<Value, String> {
+    if app.services.host_save_request.is_some() {
+        let mut options = if p.is_object() { p.clone() } else { json!({}) };
+        if let Some(fields) = options.as_object_mut() {
+            fields.remove("path");
+            fields.entry("bleed").or_insert(json!(true));
+            fields.entry("tagged").or_insert(json!(true));
+            if !app.ui.flattener.is_empty() {
+                fields.entry("flatten").or_insert(json!(app.ui.flattener));
+            }
+        }
+        return app.host_request_save("saveCopy", Some("pdf"), &options);
+    }
     let st = app.session.active().ok_or("no document")?;
     let path = match p.get("path").and_then(Value::as_str) {
         Some(s) => Some(s.to_string()),
