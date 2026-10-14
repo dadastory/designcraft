@@ -178,7 +178,9 @@ pub fn control_bar(app: &mut DesignApp, ui: &mut egui::Ui) {
                 ui.horizontal_top(|ui| {
                     let text_mode =
                         matches!(app.session.tool_id(), "type" | "verticalType") || app.session.active().is_some_and(|d| d.selection.text.is_some());
-                    if text_mode {
+                    if app.session.tool_id() == "page" {
+                        control_page(app, ui);
+                    } else if text_mode {
                         control_text(app, ui);
                     } else {
                         control_object(app, ui);
@@ -186,6 +188,93 @@ pub fn control_bar(app: &mut DesignApp, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+/// The Control panel with the Page tool, as InDesign's: reference point, X/Y, W/H, page-size
+/// preset, orientation, Liquid Page Rule and Show Parent Page Overlay, for
+/// the page the Page tool selected (else the page in view). W/H keep the reference point in place.
+fn control_page(app: &mut DesignApp, ui: &mut egui::Ui) {
+    let lang = app.ui.language.clone();
+    let Some(st) = app.session.active() else { return };
+    let units = st.doc.settings.horizontal_units;
+    let Some(page) = st.selection.page.or_else(|| crate::canvas::current_page(app)) else { return };
+    let Some(st) = app.session.active() else { return };
+    let d = st.doc.clone();
+    let Some((si, pi)) = d.page_loc(page) else { return };
+    let pg = d.spreads[si].pages[pi].clone();
+    let n = page + 1;
+    // Reference point: W/H edits keep it in place.
+    let (r, _) = ui.allocate_exact_size(vec2(30.0, 44.0), Sense::hover());
+    if let Some(p) = panels::properties::ref_point_proxy(ui, egui::Rect::from_center_size(r.center(), vec2(27.0, 27.0)), app.ui.ref_point) {
+        app.ui.ref_point = p;
+    }
+    let anchor = app.ui.ref_point.min(8);
+    let (fx, fy) = ((anchor % 3) as f64 / 2.0, (anchor / 3) as f64 / 2.0);
+    // The reference point's position: from the spine across, from the top down.
+    let (x, y) = (pg.x - d.spreads[si].spine_x() + fx * pg.width, fy * pg.height);
+    egui::Grid::new("ctl_page_xywh").num_columns(4).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+        caption(ui, crate::i18n::tr(&lang, "X:"));
+        // Pages don't move within their spread yet.
+        ui.add_enabled_ui(false, |ui| measure(ui, "cpx", Some(x), units, 64.0));
+        caption(ui, crate::i18n::tr(&lang, "W:"));
+        if let Some(v) = measure(ui, "cpw", Some(pg.width), units, 64.0) {
+            let _ = app.run("layout.pageSize", json!({"pages": [n], "width": v, "anchor": anchor}));
+        }
+        ui.end_row();
+        caption(ui, crate::i18n::tr(&lang, "Y:"));
+        ui.add_enabled_ui(false, |ui| measure(ui, "cpy", Some(y), units, 64.0));
+        caption(ui, crate::i18n::tr(&lang, "H:"));
+        if let Some(v) = measure(ui, "cph", Some(pg.height), units, 64.0) {
+            let _ = app.run("layout.pageSize", json!({"pages": [n], "height": v, "anchor": anchor}));
+        }
+        ui.end_row();
+    });
+    vsep(ui);
+    // Page-size preset and orientation.
+    let landscape = pg.width > pg.height;
+    ui.vertical(|ui| {
+        let cur = panels::properties::preset_name(pg.width, pg.height);
+        egui::ComboBox::from_id_salt("ctl_page_preset").selected_text(crate::rtl::widget(ui, crate::i18n::tr(&lang, cur))).width(130.0).show_ui(
+            ui,
+            |ui| {
+                for (name, w, h) in panels::properties::PAGE_PRESETS {
+                    if ui.selectable_label(cur == *name, crate::rtl::widget(ui, crate::i18n::tr(&lang, name))).clicked() {
+                        let (w, h) = if landscape { (h, w) } else { (w, h) };
+                        let _ = app.run("layout.pageSize", json!({"pages": [n], "width": w, "height": h, "anchor": anchor}));
+                    }
+                }
+            },
+        );
+        ui.horizontal(|ui| {
+            for (icon, tip, want) in [("orient-portrait", "Portrait", false), ("orient-landscape", "Landscape", true)] {
+                if crate::widgets::icon_toggle(ui, icon, landscape == want, crate::i18n::tr(&lang, tip)).clicked() && landscape != want {
+                    let _ = app.run("layout.pageSize", json!({"pages": [n], "width": pg.height, "height": pg.width, "anchor": anchor}));
+                }
+            }
+        });
+    });
+    vsep(ui);
+    ui.vertical(|ui| {
+        caption(ui, crate::i18n::tr(&lang, "Liquid Page Rule:"));
+        let label = panels::interactive::liquid_rule_label(pg.liquid);
+        egui::ComboBox::from_id_salt("ctl_page_rule").selected_text(crate::rtl::widget(ui, crate::i18n::tr(&lang, label))).width(150.0).show_ui(
+            ui,
+            |ui| {
+                for (r, l) in panels::interactive::LIQUID_RULES {
+                    if ui.selectable_label(pg.liquid == r, crate::rtl::widget(ui, crate::i18n::tr(&lang, l))).clicked() && pg.liquid != r {
+                        let _ = app.run("liquid.pageRule", json!({"rule": r, "pages": [n]}));
+                    }
+                }
+            },
+        );
+    });
+    vsep(ui);
+    ui.vertical(|ui| {
+        let mut overlay = pg.show_parent_overlay;
+        if ui.checkbox(&mut overlay, crate::rtl::widget(ui, crate::i18n::tr(&lang, "Show Parent Page Overlay"))).changed() {
+            let _ = app.run("layout.pageOptions", json!({"pages": [n], "showParentOverlay": overlay}));
+        }
+    });
 }
 
 /// A field label drawn as a tool icon (hover for its name).
@@ -485,9 +574,17 @@ fn control_text(app: &mut DesignApp, ui: &mut egui::Ui) {
     });
 }
 
+/// The widest a document tab grows: a longer name is shortened so its close button and the
+/// tabs after it stay in view.
+const DOC_TAB_MAX_W: f32 = 260.0;
+/// Close button and padding around a tab's title.
+const DOC_TAB_PAD: f32 = 44.0;
+
 pub fn doc_tabs(app: &mut DesignApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    let max_w = DOC_TAB_MAX_W.min(bar.width());
+    let close_label = crate::i18n::tr(&app.ui.language, "Close");
     ui.painter().rect_filled(bar, 0.0, t.tab_strip);
     ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.border));
     let mut x = bar.min.x;
@@ -500,14 +597,28 @@ pub fn doc_tabs(app: &mut DesignApp, ui: &mut egui::Ui) {
         let is_active = Some(i) == active;
         // `*` = unsaved; the view-mode suffix only in Preview (InDesign shows its GPU mode there).
         let suffix = if is_active && app.ui.screen_mode == crate::ScreenMode::Preview { " [Preview]" } else { "" };
-        let label = format!("{}{} @ {:.0}%{suffix}", if *dirty { "*" } else { "" }, crate::rtl::isolate(title), zoom * 100.0);
-        let galley = crate::rtl::plain(ui.ctx(), &label, semibold(11.5), if is_active { t.text_strong } else { t.text_dim });
-        let w = (galley.size().x + 44.0).max(if is_active { 210.0 } else { 150.0 });
+        let color = if is_active { t.text_strong } else { t.text_dim };
+        // The name gives way first; the dirty marker and zoom stay readable.
+        let zoom_label = crate::rtl::plain(ui.ctx(), &format!(" @ {:.0}%{suffix}", zoom * 100.0), semibold(11.5), color);
+        let name = format!("{}{}", if *dirty { "*" } else { "" }, crate::rtl::isolate(title));
+        let name_max = max_w - DOC_TAB_PAD - zoom_label.size().x;
+        let galley = crate::rtl::truncated(ui.ctx(), &name, semibold(11.5), color, name_max);
+        let elided = galley.elided;
+        let w = (galley.size().x + zoom_label.size().x + DOC_TAB_PAD).max(if is_active { 210.0 } else { 150.0 }).min(max_w);
         let r = egui::Rect::from_min_size(egui::pos2(x, bar.min.y), vec2(w, 28.0));
         let resp = ui.interact(r, ui.id().with(("doctab", i)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, title));
+        let resp = if elided {
+            resp.on_hover_ui(|ui| {
+                let _ = crate::rtl::label(ui, title);
+            })
+        } else {
+            resp
+        };
         ui.painter().rect_filled(r, 0.0, if is_active { t.panel } else { t.tab_strip });
         let cr = egui::Rect::from_center_size(egui::pos2(r.min.x + 18.0, r.center().y), vec2(14.0, 14.0));
         let cresp = ui.interact(cr, ui.id().with(("docclose", i)), Sense::click());
+        cresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{close_label} {title}")));
         ui.painter().text(
             cr.center(),
             egui::Align2::CENTER_CENTER,
@@ -515,7 +626,11 @@ pub fn doc_tabs(app: &mut DesignApp, ui: &mut egui::Ui) {
             egui::FontId::proportional(14.0),
             if cresp.hovered() { t.text_strong } else { t.text_dim },
         );
-        ui.painter().galley(egui::pos2(r.min.x + 32.0, r.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
+        let name_w = galley.size().x;
+        // Clipped too, for a window narrower than the zoom label.
+        let text = ui.painter().with_clip_rect(r);
+        text.galley(egui::pos2(r.min.x + 32.0, r.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
+        text.galley(egui::pos2(r.min.x + 32.0 + name_w, r.center().y - zoom_label.size().y / 2.0), zoom_label, Color32::WHITE);
         ui.painter().line_segment([r.right_top(), r.right_bottom()], Stroke::new(1.0, t.border));
         if cresp.clicked() {
             close = Some(i);
@@ -731,6 +846,46 @@ mod tests {
 
     fn rect(h: &egui_kittest::Harness<'static, test_window::Window>, label: &str) -> egui::Rect {
         h.get_by_label(label).rect()
+    }
+
+    /// A very long document name made its tab grow past the window, hiding the close button
+    /// and the tabs after it (#603).
+    #[test]
+    fn long_document_names_keep_tabs_short_and_close_buttons_visible() {
+        let latin = "Quarterly report with a very long file name ".repeat(6);
+        let hebrew = "דוח רבעוני עם שם קובץ ארוך מאוד ".repeat(6);
+        let mut app = app();
+        for title in [latin.as_str(), hebrew.as_str(), "Short"] {
+            app.run("file.new", serde_json::json!({ "title": title })).unwrap();
+        }
+        let h = test_window::open(app, vec2(1200.0, 600.0));
+        for title in [latin.as_str(), hebrew.as_str()] {
+            let tab = rect(&h, title);
+            assert!(tab.width() <= super::DOC_TAB_MAX_W, "{title:?} tab is {} wide", tab.width());
+            let close = rect(&h, &format!("Close {title}"));
+            assert!(tab.contains_rect(close), "close button {close:?} outside its tab {tab:?}");
+        }
+        let (first, short) = (rect(&h, &latin), rect(&h, "Short"));
+        assert!(short.min.x - first.min.x <= 2.0 * super::DOC_TAB_MAX_W, "the last tab {short:?} starts too far right");
+    }
+
+    #[test]
+    fn the_page_tool_has_its_own_control_panel() {
+        // Chris Cicchino's Page Tool and Liquid Layout video (1:02): with the Page tool, the
+        // Control panel shows the page's size, preset, orientation and liquid page rule.
+        let mut app = app();
+        app.run("file.new", serde_json::json!({"width": 252, "height": 144, "facingPages": false})).unwrap();
+        app.session.set_tool("page");
+        let mut h = test_window::open(app, vec2(1800.0, 600.0));
+        let _ = h.get_by_label("Liquid Page Rule:");
+        // Pages don't move within their spread, so there is no "Objects Move with Page" option, and
+        // no "Controlled by Parent" rule until parent pages have rules of their own.
+        assert!(h.query_by_label("Objects Move with Page").is_none());
+        assert!(!crate::panels::interactive::LIQUID_RULES.iter().any(|(r, _)| *r == designcraft_doc::LiquidRule::ControlledByParent));
+        assert_eq!(crate::panels::properties::preset_name(252.0, 144.0), "US Business Card");
+        h.get_by_label("Show Parent Page Overlay").click();
+        h.run_steps(4);
+        assert!(h.state().app.session.doc().unwrap().doc.spreads[0].pages[0].show_parent_overlay);
     }
 
     #[test]

@@ -569,3 +569,311 @@ fn commands_take_non_object_params_without_panicking() {
         assert!(r.is_ok(), "{p}: {r:?}");
     }
 }
+
+#[test]
+fn page_tool_selects_a_page_and_its_handles_preview_or_resize_it() {
+    use designcraft_tools::{CanvasLayout, Mods, PointerEvent, PointerKind};
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 612, "height": 792, "facingPages": false})).unwrap();
+    let id = s.execute("frame.create", &json!({"rect": [400, 100, 500, 200]})).unwrap()["id"].as_u64().unwrap();
+    let frame = |s: &Session| s.doc().unwrap().doc.item(designcraft_doc::ItemId(id)).unwrap().bounds();
+    let width = |s: &Session| s.doc().unwrap().doc.spreads[0].pages[0].width;
+    // The page on the canvas (a single page is centred on the spine).
+    let page = |s: &Session| {
+        let d = &s.doc().unwrap().doc;
+        CanvasLayout::new(d, false).page_rect(d, 0).unwrap()
+    };
+    s.set_tool("page");
+    let v = ViewInfo::at_zoom(1.0);
+    let ev = |kind, x: f64, y: f64, alt: bool| PointerEvent { mods: Mods { alt, ..Default::default() }, ..PointerEvent::new(kind, x, y) };
+    let drag = |s: &mut Session, from: (f64, f64), by: f64, alt: bool, check: &dyn Fn(&Session)| {
+        s.pointer(&ev(PointerKind::Down, from.0, from.1, alt), v).unwrap();
+        s.pointer(&ev(PointerKind::Drag, from.0 + by, from.1, alt), v).unwrap();
+        check(s);
+        s.pointer(&ev(PointerKind::Up, from.0 + by, from.1, alt), v).unwrap();
+    };
+    // A click selects the page.
+    let c = page(&s).center();
+    s.pointer(&ev(PointerKind::Down, c.x, c.y, false), v).unwrap();
+    s.pointer(&ev(PointerKind::Up, c.x, c.y, false), v).unwrap();
+    assert_eq!(s.doc().unwrap().selection.page, Some(0));
+    // A plain drag of the right handle previews the page's liquid rule and springs back.
+    s.execute("liquid.pageRule", &json!({"rule": "scale"})).unwrap();
+    let undo = s.doc().unwrap().history.undo.len();
+    let r = page(&s);
+    drag(&mut s, (r.x1, r.center().y), 612.0, false, &|s| {
+        assert_eq!(width(s), 1224.0, "previewed");
+        // Scale keeps proportions: only wider, so the frame is centred on the wider page.
+        assert_eq!(frame(s).x0, 706.0, "the Scale rule in the preview: {:?}", frame(s));
+    });
+    assert_eq!((width(&s), frame(&s)), (612.0, designcraft_geom::Rect::new(400.0, 100.0, 500.0, 200.0)), "sprung back");
+    assert_eq!(s.doc().unwrap().history.undo.len(), undo, "nothing to undo");
+    // Alt-drag resizes; with the rule off the frame stays where it is.
+    s.execute("liquid.pageRule", &json!({"rule": "off"})).unwrap();
+    let r = page(&s);
+    drag(&mut s, (r.x1, r.center().y), 100.0, true, &|_| {});
+    assert_eq!(width(&s), 712.0);
+    assert_eq!(frame(&s).x0, 400.0);
+    // The left handle grows the page to the left: the frame keeps its place by the right edge.
+    let r = page(&s);
+    drag(&mut s, (r.x0, r.center().y), -100.0, true, &|_| {});
+    let pg = s.doc().unwrap().doc.spreads[0].pages[0].clone();
+    assert_eq!(pg.width, 812.0);
+    assert_eq!(frame(&s).x0 - pg.x, 500.0, "100 pt further from the page's left edge");
+    // A click on the pasteboard deselects the page.
+    let r = page(&s);
+    s.pointer(&ev(PointerKind::Down, r.x0 - 200.0, r.center().y, false), v).unwrap();
+    assert_eq!(s.doc().unwrap().selection.page, None);
+}
+
+#[test]
+fn page_size_keeps_objects_by_its_anchor() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 400, "height": 400, "facingPages": false})).unwrap();
+    let id = s.execute("frame.create", &json!({"rect": [100, 100, 200, 200]})).unwrap()["id"].as_u64().unwrap();
+    let frame = |s: &Session| s.doc().unwrap().doc.item(designcraft_doc::ItemId(id)).unwrap().bounds();
+    // Bottom-right stays put: 100 wider and 50 taller moves the frame 100 right and 50 down.
+    s.execute("layout.pageSize", &json!({"pages": [1], "width": 500, "height": 450, "anchor": 8})).unwrap();
+    assert_eq!(frame(&s), designcraft_geom::Rect::new(200.0, 150.0, 300.0, 250.0));
+    // The centre: half of it.
+    s.execute("layout.pageSize", &json!({"pages": [1], "width": 700, "height": 450, "anchor": 4})).unwrap();
+    assert_eq!(frame(&s).x0, 300.0);
+    assert!(s.execute("layout.pageSize", &json!({"pages": [1], "width": 700, "anchor": 9})).is_err());
+    assert!(s.execute("layout.selectPage", &json!({"page": 2})).is_err());
+    assert_eq!(s.execute("layout.selectPage", &json!({"page": 1})).unwrap()["page"], 1);
+}
+
+#[test]
+fn controlled_by_parent_takes_the_parent_pages_rule() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 400, "height": 400, "facingPages": false})).unwrap();
+    let id = s.execute("frame.create", &json!({"rect": [100, 100, 200, 200]})).unwrap()["id"].as_u64().unwrap();
+    let frame = |s: &Session| s.doc().unwrap().doc.item(designcraft_doc::ItemId(id)).unwrap().bounds();
+    // The page follows its parent; the parent page re-centres.
+    s.execute("liquid.pageRule", &json!({"rule": "controlledByParent", "pages": [1]})).unwrap();
+    s.edit(|d, _| {
+        std::sync::Arc::make_mut(&mut d.parents[0]).pages[0].liquid = designcraft_doc::LiquidRule::ReCenter;
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layout.pageSize", &json!({"pages": [1], "width": 600})).unwrap();
+    assert_eq!(frame(&s).x0, 200.0, "re-centred: {:?}", frame(&s));
+    // Without a parent (or a parent that's also controlled by its parent) nothing moves.
+    s.execute("layout.pages.applyParent", &json!({"pages": [0], "parent": null})).unwrap();
+    s.execute("layout.pageSize", &json!({"pages": [1], "width": 800})).unwrap();
+    assert_eq!(frame(&s).x0, 200.0);
+    // Show Parent Page Overlay is a page option.
+    s.execute("layout.pageOptions", &json!({"pages": [1], "showParentOverlay": true})).unwrap();
+    assert!(s.doc().unwrap().doc.spreads[0].pages[0].show_parent_overlay);
+    assert!(s.execute("layout.pageOptions", &json!({"pages": [2], "showParentOverlay": true})).is_err());
+}
+
+#[test]
+fn page_tool_pins_and_locks_objects_on_object_based_pages() {
+    use designcraft_tools::{CanvasLayout, Mods, PointerEvent, PointerKind};
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 612, "height": 792, "facingPages": false})).unwrap();
+    let id = s.execute("frame.create", &json!({"rect": [256, 72, 356, 132]})).unwrap()["id"].as_u64().unwrap();
+    s.execute("liquid.pageRule", &json!({"rule": "objectBased"})).unwrap();
+    s.execute("edit.deselectAll", &json!({})).unwrap();
+    s.set_tool("page");
+    let v = ViewInfo::at_zoom(1.0);
+    let ev =
+        |kind, p: designcraft_geom::Point, alt: bool| PointerEvent { mods: Mods { alt, ..Default::default() }, ..PointerEvent::new(kind, p.x, p.y) };
+    let canvas = |s: &Session| {
+        let d = &s.doc().unwrap().doc;
+        let l = CanvasLayout::new(d, false);
+        (
+            l.page_rect(d, 0).unwrap(),
+            l.xf(designcraft_doc::SpreadRef::Doc(0)).transform_rect_bbox(d.item(designcraft_doc::ItemId(id)).unwrap().bounds()),
+        )
+    };
+    let click = |s: &mut Session, p: designcraft_geom::Point| {
+        s.pointer(&ev(PointerKind::Down, p, false), v).unwrap();
+        s.pointer(&ev(PointerKind::Up, p, false), v).unwrap();
+    };
+    let liquid = |s: &Session| s.doc().unwrap().doc.item(designcraft_doc::ItemId(id)).unwrap().liquid;
+    // A click on the object selects it with its page; its pins and locks show.
+    let (_, o) = canvas(&s);
+    click(&mut s, o.center());
+    let sel = s.doc().unwrap().selection.clone();
+    assert_eq!((sel.page, sel.items.clone()), (Some(0), vec![designcraft_doc::ItemId(id)]));
+    assert!(
+        s.overlays(v)
+            .iter()
+            .any(|o| matches!(o, designcraft_tools::Overlay::LiquidPins { pins: [false, false, false, false], resize: [true, true], .. }))
+    );
+    // The right pin (14 px outside the right edge) and the width lock (10 px right of the centre).
+    click(&mut s, designcraft_geom::Point::new(o.x1 + 14.0, o.center().y));
+    click(&mut s, designcraft_geom::Point::new(o.center().x + 10.0, o.center().y));
+    let l = liquid(&s).unwrap();
+    assert!(l.pin_right && !l.resize_width && l.resize_height && !l.pin_left, "{l:?}");
+    // Alt-drag the page 100 pt wider: the pinned, width-locked frame keeps its size by the right edge.
+    let (p, _) = canvas(&s);
+    let right = designcraft_geom::Point::new(p.x1, p.center().y);
+    s.pointer(&ev(PointerKind::Down, right, true), v).unwrap();
+    s.pointer(&ev(PointerKind::Drag, right + designcraft_geom::Vec2::new(100.0, 0.0), true), v).unwrap();
+    s.pointer(&ev(PointerKind::Up, right + designcraft_geom::Vec2::new(100.0, 0.0), true), v).unwrap();
+    let d = &s.doc().unwrap().doc;
+    let (pg, b) = (&d.spreads[0].pages[0], d.item(designcraft_doc::ItemId(id)).unwrap().bounds());
+    assert_eq!(pg.width, 712.0);
+    assert!((b.width() - 100.0).abs() < 1e-6 && (pg.x + pg.width - b.x1 - 256.0).abs() < 1e-6, "{b:?}");
+    // Hovering a pin shows its tooltip.
+    let (_, o) = canvas(&s);
+    s.pointer(&ev(PointerKind::Move, designcraft_geom::Point::new(o.x1 + 14.0, o.center().y), false), v).unwrap();
+    assert!(s.overlays(v).iter().any(|o| matches!(o, designcraft_tools::Overlay::Tip { text, .. } if text.starts_with("Object is pinned"))));
+}
+
+#[test]
+fn duplicating_a_page_keeps_its_own_size_rule_guides_and_objects() {
+    // Chris Cicchino's Page Tool video (2:06): the letterhead page is duplicated, then resized.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 252, "height": 144, "facingPages": false})).unwrap();
+    s.execute("layout.pages.insert", &json!({"count": 1})).unwrap();
+    s.execute("layout.pageSize", &json!({"pages": [2], "width": 612, "height": 792})).unwrap();
+    s.execute("liquid.pageRule", &json!({"rule": "scale", "pages": [2]})).unwrap();
+    s.execute("guide.add", &json!({"spread": 1, "page": 0, "orientation": "vertical", "position": 300})).unwrap();
+    s.execute("frame.create", &json!({"spread": 1, "rect": [100, 100, 200, 200]})).unwrap();
+    let r = s.execute("layout.pages.duplicateSpread", &json!({"spread": 1})).unwrap();
+    assert_eq!(r["page"], 2);
+    let d = s.doc().unwrap().doc.clone();
+    let (si, pi) = d.page_loc(2).unwrap();
+    let pg = &d.spreads[si].pages[pi];
+    assert_eq!((pg.width, pg.height, pg.liquid), (612.0, 792.0, designcraft_doc::LiquidRule::Scale));
+    assert_eq!(pg.guides.len(), 1);
+    assert_eq!(d.spreads[si].items.len(), 1);
+    // At the end of the document (the New Page button): the business card, not the last page's size.
+    let r = s.execute("layout.pages.duplicateSpread", &json!({"spread": 0, "atEnd": true})).unwrap();
+    assert_eq!(r["page"], 3);
+    let d = s.doc().unwrap().doc.clone();
+    let (si, pi) = d.page_loc(3).unwrap();
+    assert_eq!((d.spreads[si].pages[pi].width, d.spreads[si].pages[pi].height), (252.0, 144.0));
+}
+
+/// Load the text from a frame's out port with the Selection tool and click on the pasteboard:
+/// a new frame is threaded there and the overset text flows into it.
+#[test]
+fn threading_with_the_loaded_text_cursor_on_the_sample() {
+    use designcraft_tools::{PointerEvent, PointerKind};
+    let mut s = Session::new();
+    s.execute("file.newSample", &json!({})).unwrap();
+    let d = s.doc().unwrap().doc.clone();
+    let (sid, first) = d.stories.values().find(|st| st.frames.len() >= 2).map(|st| (st.id, st.frames[0])).expect("a threaded story");
+    // Break the thread so the first frame is overset, and select it.
+    s.execute("text.unthread", &json!({"frame": first.0})).unwrap();
+    assert!(s.cache.get(&s.doc().unwrap().doc, sid, None).is_overset());
+    s.execute("selection.set", &json!({"ids": [first.0]})).unwrap();
+    s.set_tool("selection");
+    let v = ViewInfo::at_zoom(1.0);
+    let layout = s.layout();
+    let port = designcraft_tools::thread::port_center(&s.doc().unwrap().doc, &layout, first, true, v.zoom).unwrap();
+    let ev = |k, p: designcraft_geom::Point| PointerEvent::new(k, p.x, p.y);
+    s.pointer(&ev(PointerKind::Down, port), v).unwrap();
+    s.pointer(&ev(PointerKind::Up, port), v).unwrap();
+    assert_eq!(s.cursor(port + designcraft_geom::Vec2::new(-2000.0, 0.0), Default::default(), v), designcraft_tools::Cursor::LoadedText);
+    // On the pasteboard left of the first spread.
+    let b = layout.slots[0].bounds;
+    let at = designcraft_geom::Point::new(b.x0 - 300.0, b.y0 + 100.0);
+    let undo = s.doc().unwrap().history.undo.len();
+    s.pointer(&ev(PointerKind::Down, at), v).unwrap();
+    s.pointer(&ev(PointerKind::Up, at), v).unwrap();
+    let st = s.doc().unwrap();
+    assert_eq!(st.history.undo.len(), undo + 1, "one undo step");
+    let frames = st.doc.story(sid).unwrap().frames.clone();
+    assert_eq!(frames.len(), 2);
+    let new = frames[1];
+    assert_eq!(st.selection.items, [new]);
+    let cs = s.cache.get(&s.doc().unwrap().doc, sid, None);
+    assert!(cs.frames.iter().any(|f| f.frame == new && !f.range.is_empty()), "the text flows into the new frame");
+    let nb = s.doc().unwrap().doc.item(new).unwrap().bounds();
+    assert!((nb.y0 - layout.to_spread(designcraft_doc::SpreadRef::Doc(0), at).y).abs() < 1e-6, "{nb:?}");
+}
+
+/// Drag a selection handle of item 0 on spread 0 from the edge point `at` by `by` (canvas units).
+fn drag_handle(s: &mut Session, at: designcraft_geom::Point, by: designcraft_geom::Vec2, v: ViewInfo) {
+    use designcraft_tools::{PointerEvent, PointerKind};
+    let p = s.layout().to_canvas(designcraft_doc::SpreadRef::Doc(0), at);
+    s.pointer(&PointerEvent::new(PointerKind::Down, p.x, p.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, p.x + by.x / 2.0, p.y + by.y / 2.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, p.x + by.x, p.y + by.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, p.x + by.x, p.y + by.y), v).unwrap();
+}
+
+#[test]
+fn text_frame_resize_snaps_to_the_margins() {
+    use designcraft_geom::{Point, Vec2};
+    for zoom in [1.0, 0.5] {
+        let mut s = Session::new();
+        s.execute("file.newSample", &json!({})).unwrap();
+        let margin = s.doc().unwrap().doc.spreads[0].pages[0].margin_rect();
+        let (x0, y0) = (margin.x0 + 40.0, margin.y0 + 40.0);
+        s.execute("frame.create", &json!({"rect": [x0, y0, x0 + 200.0, y0 + 200.0], "content": "text"})).unwrap();
+        s.set_tool("selection");
+        let v = ViewInfo::at_zoom(zoom);
+        let b0 = s.doc().unwrap().doc.spreads[0].items.last().unwrap().bounds();
+        // Right handle to 1.5 pt short of the right margin.
+        drag_handle(&mut s, Point::new(b0.x1, b0.center().y), Vec2::new(margin.x1 - 1.5 - b0.x1, 0.0), v);
+        let b = s.doc().unwrap().doc.spreads[0].items.last().unwrap().bounds();
+        assert!((b.x1 - margin.x1).abs() < 1e-6, "zoom {zoom}: right edge {} not on the margin {}", b.x1, margin.x1);
+        // Bottom handle to 1.5 pt past the bottom margin.
+        drag_handle(&mut s, Point::new(b.center().x, b.y1), Vec2::new(0.0, margin.y1 + 1.5 - b.y1), v);
+        let b = s.doc().unwrap().doc.spreads[0].items.last().unwrap().bounds();
+        assert!((b.y1 - margin.y1).abs() < 1e-6, "zoom {zoom}: bottom edge {} not on the margin {}", b.y1, margin.y1);
+        // Top-left corner handle onto the top and left margins.
+        drag_handle(&mut s, Point::new(b.x0, b.y0), Vec2::new(margin.x0 + 1.0 - b.x0, margin.y0 - 1.0 - b.y0), v);
+        let b = s.doc().unwrap().doc.spreads[0].items.last().unwrap().bounds();
+        assert!((b.x0 - margin.x0).abs() < 1e-6 && (b.y0 - margin.y0).abs() < 1e-6, "zoom {zoom}: corner {b:?} not on the margins {margin:?}");
+    }
+}
+
+#[test]
+fn type_tool_frames_snap_to_the_margins() {
+    use designcraft_geom::Point;
+    use designcraft_tools::{PointerEvent, PointerKind};
+    let mut s = session();
+    let margin = s.doc().unwrap().doc.spreads[0].pages[0].margin_rect();
+    s.set_tool("type");
+    let v = ViewInfo::at_zoom(1.0);
+    let c = |s: &Session, x: f64, y: f64| s.layout().to_canvas(designcraft_doc::SpreadRef::Doc(0), Point::new(x, y));
+    // From 1.5 pt off the top-left margin corner to 1.5 pt off the right margin.
+    let a = c(&s, margin.x0 + 1.5, margin.y0 + 1.5);
+    let b = c(&s, margin.x1 - 1.5, margin.y0 + 101.5);
+    let before = s.doc().unwrap().doc.spreads[0].items.len();
+    s.pointer(&PointerEvent::new(PointerKind::Down, a.x, a.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, (a.x + b.x) / 2.0, b.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, b.x, b.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, b.x, b.y), v).unwrap();
+    let items = &s.doc().unwrap().doc.spreads[0].items;
+    assert_eq!(items.len(), before + 1, "a frame was drawn");
+    let r = items.last().unwrap().bounds();
+    assert!((r.x0 - margin.x0).abs() < 1e-6 && (r.y0 - margin.y0).abs() < 1e-6, "press point {r:?} vs {margin:?}");
+    assert!((r.x1 - margin.x1).abs() < 1e-6, "right edge {} vs {}", r.x1, margin.x1);
+}
+
+#[test]
+fn duplicating_a_page_to_an_index_is_one_undo_step() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"facingPages": false})).unwrap();
+    s.execute("layout.pages.insert", &json!({"count": 2})).unwrap();
+    for (page, width) in [(1, 300), (2, 400), (3, 500)] {
+        s.execute("layout.pageSize", &json!({"pages": [page], "width": width, "height": 600})).unwrap();
+    }
+    let widths = |s: &Session| {
+        let d = &s.doc().unwrap().doc;
+        (0..d.page_count()).map(|i| d.page_loc(i).map(|(si, pi)| d.spreads[si].pages[pi].width)).collect::<Option<Vec<_>>>().unwrap()
+    };
+    // Backwards: the last page copied to the front.
+    let r = s.execute("layout.pages.duplicateSpread", &json!({"spread": 2, "to": 0})).unwrap();
+    assert_eq!(r["page"], 0);
+    assert_eq!(widths(&s), [500.0, 300.0, 400.0, 500.0]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(widths(&s), [300.0, 400.0, 500.0]);
+    // Forwards: the first page copied to the end.
+    s.execute("layout.pages.duplicateSpread", &json!({"spread": 0, "to": 3})).unwrap();
+    assert_eq!(widths(&s), [300.0, 400.0, 500.0, 300.0]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(widths(&s), [300.0, 400.0, 500.0]);
+    // Past the end: refused, nothing changes.
+    assert!(s.execute("layout.pages.duplicateSpread", &json!({"spread": 0, "to": 4})).is_err());
+    assert_eq!(widths(&s), [300.0, 400.0, 500.0]);
+}

@@ -981,7 +981,15 @@ impl Exporter<'_> {
         let (swatch, tint, angle) = (fill.swatch.as_str(), fill.tint, fill.gradient_angle);
         if let Some(g) = designcraft_color::swatch::resolve_gradient(&self.doc.swatches, swatch) {
             let kind = g.kind;
-            let expanded = g.expanded_stops();
+            let mut expanded = g.expanded_stops();
+            // Grey and CMYK stops blend as inks, so a grey stop beside a CMYK one is the K ink.
+            if !self.rgb_only && expanded.iter().any(|(_, c, _)| matches!(c, Color::Cmyk { .. })) {
+                for (_, c, _) in &mut expanded {
+                    if let Color::Gray { k } = *c {
+                        *c = Color::cmyk(0.0, 0.0, 0.0, k);
+                    }
+                }
+            }
             // A PDF shading needs one colour space. Midpoint expansion can introduce RGB even
             // when every authored stop is CMYK/Gray; PDF/A can also change the output space.
             let components = |c: &Color| match c {

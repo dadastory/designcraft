@@ -31,6 +31,7 @@ fn main() {
     }
     let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
         .with_pixels_per_point(2.0)
         .with_max_steps(1_000_000)
         .wgpu()

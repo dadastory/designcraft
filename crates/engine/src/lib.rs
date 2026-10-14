@@ -93,6 +93,9 @@ pub struct DocState {
     /// Editing parent spreads (Pages panel double-click on a parent).
     pub editing_parents: bool,
     pub uid: u64,
+    /// Recovery entries this state actually opened or published, for repeated-open and cleanup.
+    /// Bounded, deduplicated checkpoint addresses; never inferred from uid alone.
+    pub(crate) recovery_entries: Vec<(std::path::PathBuf, u64)>,
     /// Unfilled document while data-merge preview is showing a record. Not saved.
     pub preview_stash: Option<Arc<Document>>,
     /// 1-based record currently previewed.
@@ -131,6 +134,7 @@ impl DocState {
             interaction: None,
             editing_parents: false,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            recovery_entries: Vec::new(),
             preview_stash: None,
             preview_record: None,
             fonts: None,
@@ -179,6 +183,8 @@ pub struct Prefs {
     pub rich_black_output: bool,
     /// Font menu favourites (family names).
     pub favorite_fonts: Vec<String>,
+    /// Fonts picked in the font menus, most recent first (shown at the menus' top).
+    pub recent_fonts: Vec<String>,
     /// Preferences › Type › Show Font Names in English: the font menus show CJK families by their
     /// English names instead of their native ones. Documents store the English name either way.
     pub show_font_names_in_english: bool,
@@ -235,6 +241,7 @@ impl Default for Prefs {
             highlight_substituted_fonts: true,
             rich_black_output: false,
             favorite_fonts: Vec::new(),
+            recent_fonts: Vec::new(),
             show_font_names_in_english: false,
             smart_text_reflow: true,
             autocorrect: false,
@@ -253,6 +260,7 @@ pub struct Session {
     pub cache: Arc<Cache>,
     pub(crate) tool: Box<dyn designcraft_tools::Tool>,
     pub journal: Vec<(String, Value)>,
+    pub(crate) find_context: Option<cmd::find::FindContext>,
     pub clipboard: Option<Arc<Document>>,
     /// Crash-recovery folder (the app sets it; saving or closing a document removes its entry).
     pub recovery_dir: Option<std::path::PathBuf>,
@@ -269,6 +277,8 @@ pub struct Session {
     pub(crate) transforms: (Vec<(String, Value)>, Vec<designcraft_doc::ItemId>, bool),
     /// Drag and drop text editing: the press landed in the selected text.
     pub(crate) text_drag: bool,
+    /// Character formatting chosen at a bare caret, for the text typed there next.
+    pub(crate) typing_format: Option<cmd::text::TypingFormat>,
     /// The open Object Library (File › New / Open Library).
     pub library: Option<cmd::library::Library>,
     /// The open book (File › Open Book).
@@ -293,6 +303,7 @@ impl Session {
             cache: Arc::new(Cache::new()),
             tool: designcraft_tools::create("selection"),
             journal: vec![],
+            find_context: None,
             clipboard: None,
             recovery_dir: None,
             text_clipboard: None,
@@ -300,6 +311,7 @@ impl Session {
             loaded: None,
             transforms: Default::default(),
             text_drag: false,
+            typing_format: None,
             library: None,
             conveyor: Vec::new(),
             book: None,
@@ -351,13 +363,26 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
+    /// Release the transient Find/Change domain when its caller starts or closes a search.
+    pub fn reset_find_scope(&mut self) {
+        self.find_context = None;
+    }
+
+    fn discard_stale_find_scope(&mut self) {
+        if self.find_context.as_ref().is_some_and(|c| self.active().is_none_or(|st| !c.is_current(st))) {
+            self.reset_find_scope();
+        }
+    }
+
     pub fn set_active(&mut self, i: usize) {
         if i < self.docs.len() && self.active != Some(i) {
+            self.reset_find_scope();
             self.stop_data_preview();
             self.active = Some(i);
         }
     }
     pub fn add_document(&mut self, d: DocState) -> usize {
+        self.reset_find_scope();
         self.stop_data_preview();
         self.docs.push(d);
         self.active = Some(self.docs.len() - 1);
@@ -376,10 +401,12 @@ impl Session {
             self.stop_data_preview();
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if let (Some(dir), Some(d)) = (&self.recovery_dir, self.docs.get(i)) {
-            recovery::discard(dir, d.uid);
+        {
+            let recovery_dir = self.recovery_dir.clone();
+            recovery::discard_document(self, i, recovery_dir.as_deref());
         }
         if i < self.docs.len() {
+            self.reset_find_scope();
             self.docs.remove(i);
             self.active = if self.docs.is_empty() { None } else { Some(i.min(self.docs.len() - 1)) };
         }
@@ -442,6 +469,8 @@ impl Session {
         if id != "data.preview" && (spec.undoable || spec.journal) {
             self.stop_data_preview();
         }
+        // Preview restoration can replace the document before a Find handler resolves bounds.
+        self.discard_stale_find_scope();
         let before = self.active().map(|d| (d.uid, d.doc.clone()));
         let r = (spec.run)(self, params)?;
         // Undo, redo or deleting layers can take the active layer away: new objects would land on
@@ -479,6 +508,7 @@ impl Session {
         if spec.journal {
             self.journal.push((id.to_string(), params.clone()));
         }
+        self.discard_stale_find_scope();
         Ok(r)
     }
 
@@ -499,7 +529,7 @@ impl Session {
         }
         let mut d = (*st.doc).clone();
         if overset {
-            let _ = cmd::place_text_autoflow(&mut d, sid, 500);
+            let _ = cmd::place_text_autoflow(&mut d, sid, 500, "Smart Text Reflow");
         } else {
             // Drop empty trailing frames on the last pages (one frame, nothing else there).
             while let Some(story) = d.story(sid) {
@@ -566,6 +596,7 @@ impl Session {
         st.doc = Arc::new(doc);
         st.selection = sel;
         st.revision += 1;
+        self.reset_find_scope();
         Ok(r)
     }
 }

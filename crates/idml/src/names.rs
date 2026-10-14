@@ -424,10 +424,11 @@ pub fn first_baseline_out(f: FirstBaseline) -> &'static str {
         FirstBaseline::Leading => "LeadingOffset",
         FirstBaseline::XHeight => "XHeight",
         FirstBaseline::Fixed => "FixedHeight",
+        FirstBaseline::EmboxHeight => "EmboxHeight",
     }
 }
 pub fn first_baseline_in(s: &str) -> FirstBaseline {
-    [FirstBaseline::CapHeight, FirstBaseline::Leading, FirstBaseline::XHeight, FirstBaseline::Fixed]
+    [FirstBaseline::CapHeight, FirstBaseline::Leading, FirstBaseline::XHeight, FirstBaseline::Fixed, FirstBaseline::EmboxHeight]
         .into_iter()
         .find(|m| first_baseline_out(*m) == s)
         .unwrap_or(FirstBaseline::Ascent)
@@ -447,6 +448,7 @@ pub fn auto_size_in(s: &str) -> AutoSize {
         .find(|m| auto_size_out(*m) == s)
         .unwrap_or(AutoSize::Off)
 }
+
 /// Auto-size reference points in our 0..9 order (row-major, top-left first).
 pub const REF_POINTS: [&str; 9] = [
     "TopLeftPoint",
@@ -635,6 +637,7 @@ pub fn nested_until_out(u: &designcraft_doc::NestedUntil) -> (&'static str, Stri
         N::ForcedLineBreak => e("ForcedLineBreak"),
         N::EmSpace => e("EmSpaces"),
         N::EnSpace => e("EnSpaces"),
+        N::Dropcap => e("Dropcap"),
         N::Chars(c) => ("string", c.clone()),
     }
 }
@@ -653,6 +656,7 @@ pub fn nested_until_in(ty: &str, v: &str) -> designcraft_doc::NestedUntil {
         "ForcedLineBreak" => N::ForcedLineBreak,
         "EmSpaces" => N::EmSpace,
         "EnSpaces" => N::EnSpace,
+        "Dropcap" => N::Dropcap,
         _ => N::Words,
     }
 }
@@ -688,4 +692,30 @@ pub fn digits_out(d: designcraft_doc::Digits) -> &'static str {
 pub fn digits_in(s: &str) -> Option<designcraft_doc::Digits> {
     use designcraft_doc::Digits;
     [Digits::Default, Digits::Arabic, Digits::Hindi, Digits::Farsi, Digits::Native].into_iter().find(|d| digits_out(*d) == s)
+}
+
+/// A TOC separator in IDML's special-character notation: `^t` is a tab, `^^` a caret.
+pub fn toc_separator_out(s: &str) -> String {
+    s.replace('^', "^^").replace('\t', "^t")
+}
+/// IDML TOC separator → text (`^t` and `^y`, the right indent tab, are tabs; other codes stay).
+pub fn toc_separator_in(s: &str) -> String {
+    let mut out = String::new();
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        if c != '^' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            Some('t' | 'y') => out.push('\t'),
+            Some('^') => out.push('^'),
+            Some(o) => {
+                out.push('^');
+                out.push(o);
+            }
+            None => out.push('^'),
+        }
+    }
+    out
 }

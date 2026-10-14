@@ -15,11 +15,13 @@ mod frame;
 mod gradient;
 pub mod layout;
 mod nav;
+pub use nav::{LOCK_OFFSET_PX, PIN_OFFSET_PX};
 mod pen;
 mod pencil;
 pub mod select;
 pub mod snap;
 mod text;
+pub mod thread;
 mod xform;
 
 use designcraft_compose::Cache;
@@ -63,15 +65,27 @@ pub struct PointerEvent {
     pub pos: Point,
     #[serde(default)]
     pub mods: Mods,
+    /// On a press: how many presses in quick succession at this spot it completes (2 = the
+    /// second of a double click, 3 = a triple click…). 0 counts as 1.
+    #[serde(default)]
+    pub clicks: u8,
 }
 
 impl PointerEvent {
     pub fn new(kind: PointerKind, x: f64, y: f64) -> Self {
-        Self { kind, pos: Point::new(x, y), mods: Mods::default() }
+        Self { kind, pos: Point::new(x, y), mods: Mods::default(), clicks: 1 }
     }
     pub fn with_mods(mut self, m: Mods) -> Self {
         self.mods = m;
         self
+    }
+    pub fn with_clicks(mut self, n: u8) -> Self {
+        self.clicks = n;
+        self
+    }
+    /// Presses in a row: at least 2 for [`PointerKind::DoubleClick`], at least 1 otherwise.
+    pub fn click_count(&self) -> u8 {
+        if self.kind == PointerKind::DoubleClick { self.clicks.max(2) } else { self.clicks.max(1) }
     }
 }
 
@@ -309,6 +323,28 @@ pub enum Overlay {
         b: Point,
         label: String,
     },
+    /// A page selected with the Page tool (canvas rect): its outline and eight handles.
+    PageHandles(Rect),
+    /// A small tag whose bottom-left is at `p` (the Page tool's liquid page rule; English, the UI
+    /// translates it).
+    Tag {
+        p: Point,
+        text: String,
+    },
+    /// A tooltip near the pointer (English; the UI translates it).
+    Tip {
+        p: Point,
+        text: String,
+    },
+    /// An object's liquid pins and resize locks on an object-based page (Page tool), canvas
+    /// coordinates: pinned sides (top, right, bottom, left) and whether width and height follow the
+    /// page.
+    LiquidPins {
+        object: Rect,
+        page: Rect,
+        pins: [bool; 4],
+        resize: [bool; 2],
+    },
 }
 
 /// Correction from a snap, in spread coordinates for `delta`.
@@ -335,6 +371,10 @@ pub enum Cursor {
     ResizeNeSw,
     Rotate,
     Pen,
+    /// The Pen over an open path's end point: a click continues the path.
+    PenContinue,
+    /// Over a type-on-a-path bracket: dragging it moves where the text starts or ends.
+    PathBracket,
     Text,
     Hand,
     HandGrab,
@@ -342,6 +382,10 @@ pub enum Cursor {
     ZoomOut,
     Eyedropper,
     LoadedText,
+    /// Loaded text over a frame a click threads to.
+    ThreadLink,
+    /// Loaded text over the frame a click unthreads from.
+    Unthread,
     LoadedGraphic,
     NotAllowed,
 }
@@ -391,7 +435,7 @@ pub fn create(id: &str) -> Box<dyn Tool> {
         "hand" => Box::new(nav::HandTool::default()),
         "placeGun" => Box::new(nav::PlaceGun::default()),
         "zoom" => Box::new(nav::ZoomTool::default()),
-        "page" => Box::new(nav::PageTool),
+        "page" => Box::new(nav::PageTool::default()),
         "typeOnPath" => Box::new(nav::PathTypeTool),
         "gap" => Box::new(nav::GapTool::default()),
         "contentCollector" => Box::new(nav::ConveyorTool::new(false)),

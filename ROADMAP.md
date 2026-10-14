@@ -1,8 +1,10 @@
 # DesignCraft roadmap
 
-**Stage: pre-alpha** · next: alpha, ~0% and ~15–25 h away; beta ~28 points and ~420–750 h beyond that (the core-workflow gate, not the percentage: ready for real work is already ~47%)
+**Stage: pre-alpha** · next: alpha, ~5–7 h away; beta ~28 points and ~420–750 h beyond that (the core-workflow gate, not the percentage: ready for real work is already ~47%)
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (atomic engine saves and exports) · **Target:** Adobe InDesign 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (text threads by hand; the alpha gate waits on Primary Text Frame page fixes) · **Target:** Adobe InDesign 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (parent canvas refresh) · **Target:** Adobe InDesign 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (bounded control click/drag input) · **Target:** Adobe InDesign 2026
 
 DesignCraft aims at full Adobe InDesign parity, and to be better: faster, open (documented JSON
 format + IDML), scriptable by agents (MCP), and available on the web.
@@ -25,15 +27,14 @@ format + IDML), scriptable by agents (MCP), and available on the web.
 | Essentials user | ~54% | 135–250 (~50% parallel) | start-up robustness, context menus and copy/paste, threading, fonts, Windows printing |
 
 **Why pre-alpha:** it fails one of InDesign's core workflows, the alpha gate in
-[docs/roadmap.md](docs/roadmap.md#alpha-gate). A user can't thread a story from one frame to
-another: the in and out ports are drawn, but clicking the out port does nothing and there is no
-thread or unthread command. Long text flows only through autoflow on Place and Primary Text
-Frame, which users report adding and keeping pages wrongly (#165, #140, #194, #352). Everything
-else in the gate works end to end on macOS (document setup, styles, images, object editing, PDF
-export, save and reopen), and ready for real work (~47%) is above the alpha bar, so manual
-threading is the whole distance to alpha. Beyond that, beta needs INDD opening, IDML proven on
-real files, composition compared with InDesign's, and basic editing fixed on Windows and Linux.
-Details: [docs/target-app-parity.md](docs/target-app-parity.md).
+[docs/roadmap.md](docs/roadmap.md#alpha-gate). Text threads by hand (click a port, then click or
+draw a frame; thread and unthread commands), but Primary Text Frame autoflow adds pages users
+can't delete (#165). Everything else in the gate works end to end on macOS (document setup,
+styles, images, object editing, PDF export, save and reopen), and ready for real work (~47%) is
+above the alpha bar, so the Primary Text Frame page fixes are the whole distance to alpha.
+Beyond that, beta needs INDD opening, IDML proven on real files, composition compared with
+InDesign's, and basic editing fixed on Windows and Linux. Details:
+[docs/target-app-parity.md](docs/target-app-parity.md).
 
 ## By dimension
 
@@ -106,7 +107,7 @@ Also shipped: Italian (85%), Ukrainian (83%).
 Ranked; detail and estimates in [docs/roadmap.md](docs/roadmap.md), the full list in
 [docs/gaps.md](docs/gaps.md).
 
-1. **Alpha gate:** manual text threading (out-port click, thread/unthread commands) and Primary Text Frame fixes (#165) (15–25 h)
+1. **Alpha gate:** Primary Text Frame page fixes: autoflow adds pages users can't delete (#165) (5–7 h)
 2. Basic editing on every platform: copy/paste, context menus, caret formatting (30–50 h)
 3. CI running `cargo xtask ci` on pull requests (4–8 h)
 4. Open INDD through a clean-room converter, owner decision on #114 (20–60 h)
@@ -127,9 +128,56 @@ list) · [roadmap.md](docs/roadmap.md) (milestones, plan) · [parity-checklist.m
 
 ## Progress log
 
+- **2026-10-13** · Switching between document and parent pages refreshes the canvas immediately, preventing black parent pages and stale document objects when the zoom stays the same. Ordinary edits retain partial repainting. No readiness percentage change.
+
 Newest first.
 
+- **2026-10-13** · Object › Fitting has InDesign's shortcuts: Fill Frame Proportionally ⌘⌥⇧C, Fit Content Proportionally ⌘⌥⇧E, Fit Frame to Content ⌘⌥C, Fit Content to Frame ⌘⌥E, Center Content ⌘⇧E. No readiness percentage change.
+- **2026-10-13** · Gradients between process colours blend as inks, as InDesign shows them: magenta to cyan passes through C 50 M 50 (a light lilac) on screen instead of the darker RGB mix, and a midpoint between CMYK or grey stops no longer turns the PDF shading RGB. No readiness percentage change.
+- **2026-10-14** · The Swatches panel has InDesign's header: a Fill/Stroke proxy, Formatting Affects Container/Text and the Tint of the colour in front (a tint alone keeps each object's own swatch). Clicking a swatch applies it to the fill or stroke in front (of the text, when formatting affects text), and the bottom row has New Color Group, New Swatch and Delete Swatch. No readiness percentage change.
+- **2026-10-14** · With the Page tool, the Control panel shows the page as InDesign's does: W/H from a reference point, page-size preset (US Business Card added), orientation, Liquid Page Rule (now with Controlled by Parent) and Show Parent Page Overlay, which draws the parent page's size over a resized page. No readiness percentage change.
+- **2026-10-14** · On an object-based page the Page tool shows a selected object's liquid pins and resize locks as InDesign does: a click pins a side to the page edge or locks the width or height, with InDesign's tooltips. No readiness percentage change.
+- **2026-10-14** · The Liquid Layout panel follows InDesign's: Liquid Page Rule with the page number, Content › Auto-Fit, and Object Constraints › Resize with Page and Pin for the selected object on an object-based page; Create Alternate Layout moved to the Layout menu. No readiness percentage change.
+- **2026-10-14** · With the Page tool, the Control panel shows the page as InDesign's does: W/H from a reference point, page-size preset (US Business Card added), orientation, Liquid Page Rule (now with Controlled by Parent) and Show Parent Page Overlay, which draws the parent page's size over a resized page. No readiness percentage change.
+- **2026-10-14** · With the Page tool, the Control panel shows the page as InDesign's does: W/H from a reference point, page-size preset (US Business Card added), orientation, Liquid Page Rule and Show Parent Page Overlay, which draws the parent page's size over a resized page. No readiness percentage change.
+- **2026-10-14** · The Page tool works as InDesign's: a click selects a page and shows its handles and liquid page rule; dragging a handle previews the rule and springs back, Alt-drag resizes the page from the opposite edge, Shift keeps proportions, with a W/H readout. No readiness percentage change.
+- **2026-10-14** · With the Page tool, a guide dragged from a ruler is a liquid guide (dashed), as in InDesign; guide-based pages stretch the objects it crosses. No readiness percentage change.
+- **2026-10-14** · The Pages panel menu follows InDesign's order: Insert Pages…, Move Pages…, Duplicate Spread (and at End of Document), Delete Page/Spread, New Parent…, Apply Parent to Pages, Override All Parent Page Items, Parent Pages, Create Alternate Layout…, Numbering & Section Options…, Allow Selected Spread to Shuffle. No readiness percentage change.
+- **2026-10-14** · Pages panel: Alt-drag copies a page, a page dropped on Create new page is duplicated at the end, Edit page size offers the presets and Custom Page Size…; duplicated pages keep their own size, rule and guides; thumbnails of pages of their own size stay in their rows. No readiness percentage change.
+- **2026-10-12** · Text threads by hand: click a selected text frame's in or out port to load
+  the text cursor, then click a frame to thread it, click empty space for a column-wide frame or
+  drag one (it snaps like frame drawing); Shift-click autoflows, Alt-click stays loaded on the
+  frame just added; click the linked frame or double-click a port to break the thread.
+  `text.thread`, `text.unthread`, `text.removeFromThread` with undo; locked frames and layers
+  refuse threads. The alpha gate now waits only on the Primary Text Frame page fixes (#165). No
+  readiness percentage change.
+- **2026-10-13** · Layout ▸ Table of Contents opens a real dialog: title and title style, Include Paragraph Styles and Other Styles lists with Add and Remove, and per style its entry style, page number position (after, before, none), separator and level. Replace Existing regenerates the current table of contents in place; otherwise OK makes a new frame on the page in view. IDML export writes the definition as a TOC style that import reads back, so Update works after a round trip. No readiness percentage change.
+- **2026-10-13** · Control-channel clicks and drags validate positive counts and the complete pending-event budget before queuing input (#732). Oversized requests leave pending gestures intact, preventing unbounded click-count allocation. No readiness percentage change.
+- **2026-10-12** · macOS Dock Quit uses the same unsaved-document prompts as window and menu Quit. Repeated requests keep the current answers; Cancel retains every tab and unsaved recovery checkpoint, and completed Save/Don't Save answers exit through the ordinary event loop. No readiness percentage change.
+- **2026-10-12** · Orderly native exit writes the latest recovery state after finalizing current quit approvals; incomplete or stale plans keep their documents, and Undo to the saved state clears stale recovery. Unavailable or failed recovery is reported. Cancelable macOS Dock Quit remains open (#544). No readiness percentage change.
+- **2026-10-12** · Recovered documents keep a checkpoint until saved, closed or reverted, including a second crash before autosave. Restarted document IDs and explicit recovery folders preserve other snapshots; failed republishing retains the original. No readiness percentage change.
+- **2026-10-12** · Book numbering and style updates prepare every chapter before saving. Only closed native chapters are changed; imported IDML remains a read-only style/PDF source. If a later disk write fails, the error names the completed chapters; the batch is not a whole-book transaction. No readiness percentage change.
+- **2026-10-12** · Desktop write callbacks and CLI raster exports use the atomic writer too; open readers retain the original bytes, while private Unix modes and symlink targets survive replacement. Permanent tests cover both actual callers. No readiness percentage change.
+- **2026-10-12** · Save As, library edits and book collection edits persist prospective values before changing live state; failed writes preserve the document and existing collections. Save a Copy rebases data-source paths for its destination without changing the open document. No readiness percentage change.
+- **2026-10-12** · The Pen tool continues an open path from either end point, as in InDesign: the cursor shows it over an end point, a click there carries on drawing that path, a drag first reshapes the end point's direction lines, and the other end closes it. Object › Paths › Reverse Path (`path.reverse`); `path.setAnchor`; `path.appendAnchor` and `path.close` take a subpath. No readiness percentage change.
+- **2026-10-12** · Editing type on a path: the Type tool clicks, drags and double-clicks along the curve (the character under the pointer, not one on the straightened line), a click on the letters themselves hits the frame, and the caret and highlight bend with the path. No readiness percentage change.
+- **2026-10-12** · Type on a path has start and end brackets, as in InDesign: selected path type shows them across the path, and dragging either with the Selection or Direct Selection tool moves where the text starts or ends (text past the end bracket is overset). `type.pathOptions {end}`; IDML reads and writes EndBracket. No readiness percentage change.
+- **2026-10-12** · Window close and application/menu Quit ask about unsaved documents; later Cancel keeps every tab open, including earlier Don't Save choices. Approvals are rechecked after edits. Cancelable macOS Dock Quit remains open (#544). No readiness percentage change.
+- **2026-10-12** · Each running app keeps recovery data in its own locked folder; current folder and lock ownership are checked before writes and cleanup. Failed isolation disables recovery with a warning instead of sharing document IDs. No readiness percentage change.
 - **2026-10-12** · Native engine saves and exports replace files atomically; failed writes retain the original, private staging preserves Unix permissions, and valid long filenames work. Desktop Services and CLI raster exports remain separate follow-ups. No readiness percentage change.
+- **2026-10-12** · Hyphenation Zone applies to the Single-line Composer only, as in InDesign. With the default Paragraph Composer, ragged text hyphenates where InDesign does (aper-natem), giving the same line breaks. No readiness percentage change.
+- **2026-10-12** · The Tools panel's Fill/Stroke keys work: D (default fill and stroke), X (fill or stroke in front), Shift+X (swap per object, tints included) and / (Apply None), as `color.*` commands; swap and default are one undo step (`object.swapFillStroke`, `object.defaultFillStroke`); the Color panel follows the proxy's fill/stroke choice. No readiness percentage change.
+- **2026-10-11** · Corner Options keep curved sides curved and round every corner point, including where an arc meets a line (a Pathfinder quarter circle with rounded corners stayed a triangle). No readiness percentage change.
+- **2026-10-11** · `story.replaceRange`, `story.setText`, notes, footnotes, endnotes, type on a path and table cells read `\r` and `\r\n` as paragraph returns, as `frame.create` and `text.insert` already did. No readiness percentage change.
+- **2026-10-11** · The View menu follows InDesign's: proofing first, then zoom, Rotate Spread, Screen Mode, Display Performance, rulers, Extras, Grids & Guides and Structure; the view items that sat at the end of the Type menu moved there. No readiness percentage change.
+- **2026-10-12** · Underlines and strikethroughs are drawn as one bar per stretch of text on screen, as in PDF export: a bar per letter left faint seams between the letters. No readiness percentage change.
+- **2026-10-13** · Placed PDFs are drawn through pdfcraft's patched hayro crates: calculator functions whose `idiv` divides by zero or overflows, chains of stitching functions a hundred thousand deep, and mesh shadings with points far off the page, ten thousand overlapping triangles or forty thousand patches no longer panic, overflow the stack, run for over a minute or use more than 2 GiB of memory. A page with a `/UserUnit`, and its trim, bleed and art boxes, are sized in points. No readiness percentage change.
+- **2026-10-12** · Properties › Transform shows rotation, shear and X/Y scale, and Rotate 90° and Flip Horizontal/Vertical buttons, as InDesign's does. No readiness percentage change.
+- **2026-10-12** · Edit › Step and Repeat has its InDesign dialog: Repeat (Count, or Rows and Columns with Create as a grid), Offset (Vertical, Horizontal, in ruler units) and Preview, which shows the copies while the dialog is open; Cancel takes them away and OK makes them as one undo step. No readiness percentage change.
+- **2026-10-12** · Double-clicking the Fill or Stroke box in the Tools panel opens the Color Picker with the selection's colour, as in InDesign (it opened the Swatches panel). No readiness percentage change.
+- **2026-10-12** · The Effects panel shows the level its settings apply to ("Group: Color Dodge 100%") and, as in InDesign, Isolate Blending and Knockout Group for a selected group. No readiness percentage change.
+- **2026-10-11** · Properties gains InDesign's Pathfinder section (Add, Subtract, Intersect, Exclude Overlap, Minus Back) with several objects selected; section titles and icon buttons have accessible names. No readiness percentage change.
+- **2026-10-12** · The Eyedropper samples a placed image: clicking the photo with text (or objects) selected fills them with the image's colour under the pointer, as an unnamed colour (`color.sample`), as in InDesign. Images on locked layers can be sampled. No readiness percentage change.
 - **2026-10-12** · Words in capitals hyphenate like capitalized words (FERRUM COM-MODI), as in InDesign; Hyphenate Capitalized Words off keeps them whole. No readiness percentage change.
 - **2026-10-11** · `transform.move {copy}`, Edit › Duplicate and Step and Repeat return the copies' ids, so a script can go on with them. No readiness percentage change.
 - **2026-10-11** · `object.fill` and `object.stroke` refuse a swatch name the document doesn't have (it painted nothing) and suggest the name meant (`Paper` → `[Paper]`). No readiness percentage change.
@@ -172,6 +220,7 @@ Newest first.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Manual text threading landed; alpha distance 15–25 h → 5–7 h (Primary Text Frame page fixes, #165) |
 | 2026-10-10 | minor | Full number 42% → 47% (method aligned with the standard: plain weighted sum, no new evidence); readiness table with hours per audience |
 | 2026-10-10 | minor | Headline adds mainstream practitioner (~42%) and essentials user (~54%); method in docs/target-app-parity.md |
 | 2026-10-10 | minor | Stage alpha → pre-alpha under the new core-workflow gate: manual text threading is missing; alpha gate table added to docs/roadmap.md |
