@@ -51,9 +51,8 @@ impl El {
     }
 }
 
-fn local(n: &[u8]) -> String {
-    let s = String::from_utf8_lossy(n);
-    s.rsplit(':').next().unwrap_or(&s).to_string()
+fn local(n: &str) -> String {
+    n.rsplit(':').next().unwrap_or(n).to_string()
 }
 
 pub(crate) fn parse(xml: &str) -> Result<El, ImportError> {
@@ -67,7 +66,9 @@ pub(crate) fn parse(xml: &str) -> Result<El, ImportError> {
                     attrs: e
                         .attributes()
                         .flatten()
-                        .map(|a| (local(a.key.as_ref()), a.unescape_value().map(|v| v.to_string()).unwrap_or_default()))
+                        .map(|a| {
+                            (local(a.key.as_ref()), a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map(|v| v.to_string()).unwrap_or_default())
+                        })
                         .collect(),
                     kids: vec![],
                 };
@@ -79,7 +80,9 @@ pub(crate) fn parse(xml: &str) -> Result<El, ImportError> {
                     attrs: e
                         .attributes()
                         .flatten()
-                        .map(|a| (local(a.key.as_ref()), a.unescape_value().map(|v| v.to_string()).unwrap_or_default()))
+                        .map(|a| {
+                            (local(a.key.as_ref()), a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map(|v| v.to_string()).unwrap_or_default())
+                        })
                         .collect(),
                     kids: vec![],
                 };
@@ -95,14 +98,14 @@ pub(crate) fn parse(xml: &str) -> Result<El, ImportError> {
                 }
             }
             Event::Text(t) => {
-                let s = t.decode().map(|s| s.to_string()).unwrap_or_default();
+                let s = t.into_inner().into_owned();
                 let s = quick_xml::escape::unescape(&s).map(|s| s.to_string()).unwrap_or(s);
                 if let Some(p) = stack.last_mut() {
                     p.kids.push(Node::Text(s));
                 }
             }
             Event::GeneralRef(e) => {
-                let name = String::from_utf8_lossy(&e).to_string();
+                let name = e.as_ref().to_string();
                 let s = match name.as_str() {
                     "amp" => "&".to_string(),
                     "lt" => "<".into(),

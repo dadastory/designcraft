@@ -220,17 +220,17 @@ pub fn parse(bytes: &[u8]) -> Result<El, String> {
                 stack.last_mut().ok_or("unbalanced")?.push(el);
             }
             Event::Text(t) => {
-                let s = t.decode().map_err(|e| e.to_string())?;
+                let s = t.into_inner();
                 push_text(stack.last_mut().ok_or("unbalanced")?, &s);
             }
             Event::CData(t) => {
-                let s = String::from_utf8_lossy(&t).to_string();
+                let s = t.into_inner().into_owned();
                 push_text(stack.last_mut().ok_or("unbalanced")?, &s);
             }
             Event::GeneralRef(g) => {
                 let s = match g.resolve_char_ref().map_err(|e| e.to_string())? {
                     Some(c) => c.to_string(),
-                    None => match g.decode().map_err(|e| e.to_string())?.as_ref() {
+                    None => match g.as_ref() {
                         "amp" => "&".into(),
                         "lt" => "<".into(),
                         "gt" => ">".into(),
@@ -242,8 +242,8 @@ pub fn parse(bytes: &[u8]) -> Result<El, String> {
                 push_text(stack.last_mut().ok_or("unbalanced")?, &s);
             }
             Event::PI(p) => {
-                let target = String::from_utf8_lossy(p.target()).to_string();
-                let content = String::from_utf8_lossy(p.content()).trim().to_string();
+                let target = p.target().to_string();
+                let content = p.content().trim().to_string();
                 if let Some(top) = stack.last_mut() {
                     top.children.push(Node::Pi(target, content));
                 }
@@ -278,12 +278,12 @@ fn push_text(el: &mut El, s: &str) {
 }
 
 fn start_el(e: &quick_xml::events::BytesStart) -> Result<El, String> {
-    let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+    let name = e.name().as_ref().to_string();
     let mut el = El::new(&name);
     for a in e.attributes().with_checks(false) {
         let a = a.map_err(|e| e.to_string())?;
-        let k = String::from_utf8_lossy(a.key.as_ref()).to_string();
-        let v = a.unescape_value().map(|v| v.to_string()).unwrap_or_else(|_| String::from_utf8_lossy(&a.value).to_string());
+        let k = a.key.as_ref().to_string();
+        let v = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map(|v| v.to_string()).unwrap_or_else(|_| a.value.to_string());
         el.attrs.push((k, v));
     }
     Ok(el)

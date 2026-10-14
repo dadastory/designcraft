@@ -127,7 +127,7 @@ fn parse(xml: &str) -> std::result::Result<Vec<Element>, String> {
         match r.read_event().map_err(|e| e.to_string())? {
             Event::Start(e) => {
                 depth += 1;
-                let name = String::from_utf8_lossy(e.local_name().as_ref()).to_string();
+                let name = e.local_name().as_ref().to_string();
                 match depth {
                     2 => out.push(Element { name, text: String::new(), children: vec![] }),
                     3 => child = Some((name, String::new())),
@@ -135,15 +135,15 @@ fn parse(xml: &str) -> std::result::Result<Vec<Element>, String> {
                 }
             }
             Event::Empty(e) if depth == 1 => {
-                out.push(Element { name: String::from_utf8_lossy(e.local_name().as_ref()).to_string(), text: String::new(), children: vec![] });
+                out.push(Element { name: e.local_name().as_ref().to_string(), text: String::new(), children: vec![] });
             }
             ev @ (Event::Text(_) | Event::GeneralRef(_) | Event::CData(_)) => {
                 let s = match ev {
-                    Event::Text(t) => t.decode().map_err(|e| e.to_string())?.to_string(),
-                    Event::CData(t) => String::from_utf8_lossy(&t).to_string(),
+                    Event::Text(t) => t.into_inner().into_owned(),
+                    Event::CData(t) => t.into_inner().into_owned(),
                     Event::GeneralRef(g) => match g.resolve_char_ref().map_err(|e| e.to_string())? {
                         Some(c) => c.to_string(),
-                        None => match g.decode().map_err(|e| e.to_string())?.as_ref() {
+                        None => match g.as_ref() {
                             "amp" => "&".into(),
                             "lt" => "<".into(),
                             "gt" => ">".into(),

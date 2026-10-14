@@ -301,8 +301,8 @@ fn read_tree(xml: &str) -> Result<Node, String> {
     let mut r = quick_xml::Reader::from_str(xml);
     let mut stack: Vec<Node> = Vec::new();
     let node = |e: &quick_xml::events::BytesStart| Node {
-        name: String::from_utf8_lossy(e.name().as_ref()).to_string(),
-        attrs: e.attributes().flatten().map(|a| String::from_utf8_lossy(a.key.as_ref()).to_string()).collect(),
+        name: e.name().as_ref().to_string(),
+        attrs: e.attributes().flatten().map(|a| a.key.as_ref().to_string()).collect(),
         children: vec![],
         text: false,
     };
@@ -325,7 +325,7 @@ fn read_tree(xml: &str) -> Result<Node, String> {
             }
             Event::Text(t) => {
                 if let Some(p) = stack.last_mut()
-                    && !t.iter().all(u8::is_ascii_whitespace)
+                    && !t.bytes().all(|b| b.is_ascii_whitespace())
                 {
                     p.text = true;
                 }
