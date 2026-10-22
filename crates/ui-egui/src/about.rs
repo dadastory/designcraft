@@ -1,6 +1,6 @@
 //! Native version and contributor credits for the embedded layout editor.
 
-use egui::{Color32, Rect, vec2};
+use egui::{Color32, Rect, pos2, vec2};
 
 use crate::DesignApp;
 use crate::theme::{Tokens, semibold};
@@ -18,8 +18,18 @@ pub fn show(app: &mut DesignApp, ctx: &egui::Context) {
         return;
     }
     let t = Tokens::get(ctx);
-    let resp = egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
+    let area = egui::Id::new("about");
+    let instance = area.with("placement");
+    let resp = crate::modal_drag::modal(ctx, area, instance).show(ctx, |ui| {
         ui.set_width(if app.ui.about_tab == 0 { 460.0 } else { 640.0 });
+        // The tab row is the title row. The tabs register after the drag area, so they stay clickable.
+        let margin = egui::Frame::popup(ui.style()).inner_margin;
+        let top = ui.cursor().top();
+        let title_row = Rect::from_min_max(
+            pos2(ui.max_rect().left() - margin.leftf(), top - margin.topf()),
+            pos2(ui.max_rect().right() + margin.rightf(), top + ui.spacing().interact_size.y),
+        );
+        crate::modal_drag::title_drag(ui, instance, title_row);
         ui.horizontal(|ui| {
             for (i, l) in ABOUT_TABS.iter().enumerate() {
                 let i = i as u8;
@@ -34,9 +44,9 @@ pub fn show(app: &mut DesignApp, ctx: &egui::Context) {
             ui.allocate_ui_with_layout(vec2(ui.available_width(), h), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_min_height(h);
                 if app.ui.about_tab == 1 {
-                    crate::credits::contributors_ui(ui);
+                    crate::credits::contributors_ui(ui, &app.ui.language);
                 } else {
-                    crate::credits::models_ui(ui);
+                    crate::credits::models_ui(ui, &app.ui.language);
                 }
             });
             ui.separator();

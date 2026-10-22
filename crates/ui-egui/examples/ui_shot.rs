@@ -23,7 +23,8 @@ fn main() {
     };
     let (tx, rx) = std::sync::mpsc::channel::<ControlRequest>();
     let mut app = DesignApp::new(Session::new(), services).with_control(rx);
-    app.integrated_titlebar = true;
+    app.integrated_titlebar = cfg!(target_os = "macos");
+    app.custom_titlebar = cfg!(target_os = "windows");
     let lines: Vec<serde_json::Value> =
         script.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).expect("json line")).collect();
     if lines.first().is_none_or(|l| l.get("empty").is_none()) {
@@ -78,6 +79,12 @@ fn main() {
                 }
             }
             step_n(&mut harness, 2);
+        }
+        // Frames that aren't rendered keep their texture changes for the next render: a script
+        // that edits a long document (every edit redraws the Pages panel's thumbnails) without
+        // screenshots piled them up until the shot's render timed out on the GPU. Render each line.
+        if l.get("shot").is_none() {
+            let _ = harness.render();
         }
     }
 }
