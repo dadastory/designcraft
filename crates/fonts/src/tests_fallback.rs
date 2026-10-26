@@ -115,9 +115,9 @@ fn chain_fonts_load_from_the_font_folders_when_first_needed() {
     let db = FontDb::with_font_dirs(vec![dir.clone()]);
     db.add_font(other());
     assert_eq!(family(&db, HAN, None).as_deref(), Some(first_loaded("Other CJK")));
-    assert!(!db.is_loaded("Songti SC"), "no language, no chain font loaded");
+    assert!(!db.has_loaded_family("Songti SC"), "no language, no chain font loaded");
     assert_eq!(family(&db, HAN, Some("zh-Hans")).as_deref(), Some("Songti SC"));
-    assert!(!db.is_loaded("AppleMyungjo"), "only what the chain needed");
+    assert!(!db.has_loaded_family("AppleMyungjo"), "only what the chain needed");
     assert_eq!(family(&db, HAN, None).as_deref(), Some(first_loaded("Other CJK")), "once loaded, still not used without the language");
 
     // With the system fallback off, installed chain fonts aren't loaded.
@@ -125,7 +125,7 @@ fn chain_fonts_load_from_the_font_folders_when_first_needed() {
     db.add_font(other());
     db.set_system_fallback(false);
     assert_eq!(family(&db, HAN, Some("ko")).as_deref(), Some(first_loaded("Other CJK")));
-    assert!(!db.is_loaded("AppleMyungjo"));
+    assert!(!db.has_loaded_family("AppleMyungjo"));
 }
 
 const KA: char = 'ക';
@@ -154,6 +154,6 @@ fn malayalam_fonts_load_from_the_font_folders_when_first_needed() {
     std::fs::write(dir.join("noto.ttf"), font_with("Noto Sans Malayalam", &[KA]).unwrap()).unwrap();
     let db = FontDb::with_font_dirs(vec![dir]);
     db.add_font(font_with("Arial Unicode MS", &[KA]).unwrap());
-    assert!(!db.is_loaded("Noto Sans Malayalam"));
+    assert!(!db.has_loaded_family("Noto Sans Malayalam"));
     assert_eq!(family(&db, KA, None).as_deref(), Some("Noto Sans Malayalam"));
 }

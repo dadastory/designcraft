@@ -146,7 +146,7 @@ fn the_scan_reads_collections_and_loads_fonts_only_when_used() {
     let db = FontDb::with_font_dirs(vec![dir.clone()]);
     assert_eq!(db.styles(FAMILY), ["Regular", "Bold"]);
     // Cataloged, not loaded.
-    assert!(!db.is_loaded(FAMILY));
+    assert!(!db.has_loaded_family(FAMILY));
     let bold = db.face(FAMILY, "Bold");
     assert_eq!((bold.style.as_str(), bold.index()), ("Bold", 1));
     assert_eq!(db.face(FAMILY, "Regular").index(), 0, "the collection's faces load together");
@@ -225,10 +225,10 @@ fn a_familys_kind_is_read_without_keeping_it_loaded() {
     let (kind, added) = fonts.family_kind(FAMILY).expect("an installed family");
     assert_eq!(kind.class, crate::kind::FontClass::SansSerif);
     assert!(added.is_some(), "the file's date");
-    assert!(!db.is_loaded(FAMILY), "the file was read and let go");
+    assert!(!db.has_loaded_family(FAMILY), "the file was read and let go");
     // A loaded family is asked directly, with the same answer.
     let _ = fonts.face(FAMILY, "Regular");
-    assert!(db.is_loaded(FAMILY));
+    assert!(db.has_loaded_family(FAMILY));
     assert_eq!(fonts.family_kind(FAMILY).map(|(k, _)| k.class), Some(crate::kind::FontClass::SansSerif));
     assert!(fonts.family_kind("No Such Family").is_none());
 }
@@ -285,7 +285,7 @@ fn font_menus_group_installed_and_loaded_fonts_without_loading_them() {
     assert_eq!(find("Groups Kana").group, FontGroup::Japanese);
     assert_eq!(find("Groups Ming").group, FontGroup::ChineseTraditional);
     assert_eq!(find(crate::DEFAULT_FAMILY).group, FontGroup::Western);
-    assert!(!db.is_loaded("Groups Mincho"), "the scan read its tables, not the font");
+    assert!(!db.has_loaded_family("Groups Mincho"), "the scan read its tables, not the font");
     // Families are listed once.
     assert_eq!(infos.iter().filter(|i| i.family == "Groups Mincho").count(), 1);
     let _ = std::fs::remove_dir_all(&dir);
@@ -364,7 +364,7 @@ fn a_rescan_does_not_cache_an_older_in_flight_glyph_miss() {
     scan.join().unwrap();
     assert!(old_face.is_none(), "the paused lookup only searched the old paths");
     assert!(db.has_family(family));
-    assert!(!db.is_loaded(family), "a rescan catalogs the font without loading it");
+    assert!(!db.has_loaded_family(family), "a rescan catalogs the font without loading it");
     // The old miss must not hide the new catalog entry; no second rescan is performed.
     assert_eq!(db.fallback_for(c, 0, None).unwrap().family, family);
     std::fs::remove_dir_all(db.font_dirs.first().unwrap()).unwrap();
@@ -380,7 +380,7 @@ fn installed_and_loaded_fonts_are_found_by_postscript_name() {
     let found = Some(("DC Test PS Installed".to_string(), "Regular".to_string()));
     // From the catalog, without loading the font; case doesn't matter.
     assert_eq!(db.postscript_face("dctestpsinstalled-regular"), found);
-    assert!(!db.is_loaded("DC Test PS Installed"));
+    assert!(!db.has_loaded_family("DC Test PS Installed"));
     // Bundled and added (loaded) faces.
     assert_eq!(db.postscript_face("SourceSerif4-Semibold"), Some(("Source Serif 4".to_string(), "Semibold".to_string())));
     db.add_font(crate::testing::font_with("DC Test PS Added", &['a']).unwrap());

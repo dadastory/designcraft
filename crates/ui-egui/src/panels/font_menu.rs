@@ -69,9 +69,13 @@ fn meta(ui: &Ui, fonts: &designcraft_fonts::ScopedFonts<'static>, scope: u32, fa
         return m;
     }
     let styles = fonts.styles(family);
-    let kind = fonts.face(family, &regular(&styles)).kind();
+    let loaded = fonts.is_loaded(family, &regular(&styles));
+    let kind = if loaded { fonts.face(family, &regular(&styles)).kind() } else { FaceKind::default() };
     let m = FamilyMeta { styles, kind };
-    ui.data_mut(|d| d.insert_temp(key, m.clone()));
+    // Don't keep placeholder metadata: the host may supply this family's bytes later.
+    if loaded {
+        ui.data_mut(|d| d.insert_temp(key, m.clone()));
+    }
     m
 }
 
@@ -222,19 +226,22 @@ fn preview(
     text: &str,
     size: f32,
     color: Color32,
-) -> egui::TextureHandle {
+) -> Option<egui::TextureHandle> {
+    if !fonts.is_loaded(family, style) {
+        return None;
+    }
     let ppp = ui.ctx().pixels_per_point();
     let px = (size * ppp).round() as u32;
     let key = egui::Id::new(("font_preview", family, style, scope, text, px, color.to_array()));
     let cache_id = egui::Id::new("font_previews");
     if let Some(t) = ui.data_mut(|d| d.get_temp_mut_or_default::<Previews>(cache_id).get(key)) {
-        return t;
+        return Some(t);
     }
     let img = designcraft_render::glyphs::text_line(fonts, family, style, text, px, color.to_array());
     let ci = egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels);
     let t = crate::widgets::load_texture(ui.ctx(), format!("font_preview_{family}_{style}"), ci, egui::TextureOptions::LINEAR);
     ui.data_mut(|d| d.get_temp_mut_or_default::<Previews>(cache_id).insert(key, t.clone()));
-    t
+    Some(t)
 }
 
 /// Font menu previews kept for reuse, at most [`Previews::CAP`]: each sample text, size and colour
@@ -603,11 +610,12 @@ pub fn font_menu_body(app: &mut DesignApp, ui: &mut Ui, menu: &[FamilyInfo], cur
             let preview_x = r.min.x + (r.width() * 0.42).max(190.0);
             let icons_x = r.max.x - 52.0;
             let face_style = style.map_or_else(|| regular(&m.styles), str::to_string);
-            let tex = preview(ui, &fonts, scope, f, &face_style, &sample, sample_size, t.text);
-            let size = tex.size_vec2() / ui.ctx().pixels_per_point();
-            let shown = Rect::from_min_size(pos2(preview_x, cy - size.y / 2.0), size);
-            let clip = Rect::from_min_max(pos2(preview_x, r.min.y), pos2(icons_x - 6.0, r.max.y));
-            ui.painter_at(clip).image(tex.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            if let Some(tex) = preview(ui, &fonts, scope, f, &face_style, &sample, sample_size, t.text) {
+                let size = tex.size_vec2() / ui.ctx().pixels_per_point();
+                let shown = Rect::from_min_size(pos2(preview_x, cy - size.y / 2.0), size);
+                let clip = Rect::from_min_max(pos2(preview_x, r.min.y), pos2(icons_x - 6.0, r.max.y));
+                ui.painter_at(clip).image(tex.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
             // Show Similar Fonts (on hover), and the format.
             if style.is_none() && (hovered || st.similar.as_deref() == Some(f.as_str())) {
                 let sim = Rect::from_center_size(pos2(icons_x + 12.0, cy), vec2(18.0, 18.0));
