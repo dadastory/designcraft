@@ -266,7 +266,7 @@ fn svg_preflight(bytes: &[u8]) -> Option<()> {
             Event::DocType(doctype) => {
                 // A '[' inside a quoted external identifier is not an internal subset.
                 let mut quote = None;
-                for &byte in doctype.as_ref() {
+                for byte in doctype.as_ref().bytes() {
                     match (quote, byte) {
                         (Some(q), b) if b == q => quote = None,
                         (None, b'\'' | b'"') => quote = Some(byte),

@@ -115,7 +115,7 @@ pub(crate) fn parse(xml: &str) -> Result<El, ImportError> {
                 }
             }
             Event::CData(t) => {
-                let s = t.decode().map(|s| s.to_string()).unwrap_or_default();
+                let s = t.into_inner().into_owned();
                 if let Some(p) = stack.last_mut() {
                     p.kids.push(Node::Text(s));
                 }

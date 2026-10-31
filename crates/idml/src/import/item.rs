@@ -23,22 +23,22 @@ fn svg_viewbox_size(data: &[u8]) -> Option<(f64, f64)> {
             _ => buf.clear(),
         }
     };
-    if root.local_name().as_ref() != b"svg" {
+    if root.local_name().as_ref() != "svg" {
         return None;
     }
-    let attr = |name: &[u8]| {
+    let attr = |name: &str| {
         root.attributes()
             .with_checks(false)
             .flatten()
             .find(|a| a.key.as_ref() == name)
             .and_then(|a| a.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok().map(|v| v.to_string()))
     };
-    let absolute = |name: &[u8]| attr(name).is_some_and(|v| !v.trim().ends_with('%'));
-    if absolute(b"width") || absolute(b"height") {
+    let absolute = |name: &str| attr(name).is_some_and(|v| !v.trim().ends_with('%'));
+    if absolute("width") || absolute("height") {
         return None;
     }
     let vb: Vec<f64> =
-        attr(b"viewBox")?.split(|c: char| c.is_whitespace() || c == ',').filter(|v| !v.is_empty()).filter_map(|v| v.parse().ok()).collect();
+        attr("viewBox")?.split(|c: char| c.is_whitespace() || c == ',').filter(|v| !v.is_empty()).filter_map(|v| v.parse().ok()).collect();
     match vb[..] {
         [_, _, w, h] if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 => Some((w, h)),
         _ => None,
