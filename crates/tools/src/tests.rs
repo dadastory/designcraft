@@ -27,6 +27,7 @@ fn color_theme_tool_requests_a_palette_without_editing_the_image() {
     let mut d = Document::new(&NewDocument::default());
     let id = add_rect(&mut d, Rect::new(100.0, 100.0, 200.0, 200.0));
     d.item_mut(id).unwrap().content = designcraft_doc::Content::Graphic(designcraft_doc::Graphic {
+        layer_options: None,
         asset: designcraft_doc::AssetId(1),
         size: (100.0, 100.0),
         xf: designcraft_geom::Affine::IDENTITY,
@@ -67,6 +68,56 @@ fn frame_tool_drag_emits_begin_preview_commit() {
         other => panic!("{other:?}"),
     }
     assert_eq!(t.pointer(&cx, &PointerEvent::new(PointerKind::Up, 110.0, 60.0)), vec![Action::Commit]);
+}
+
+/// While a frame is drawn, its size shows in the document's units, as InDesign's readout does
+/// ("W: 6.08 cm" over "H: 6.08 cm" in Zero2Graphic's page layout tutorial, 0:43).
+#[test]
+fn frame_tool_readout_shows_the_size_in_the_document_units() {
+    let mut d = Document::new(&NewDocument::default());
+    d.settings.horizontal_units = Unit::Centimeters;
+    d.settings.vertical_units = Unit::Centimeters;
+    let (s, c, l) = (Selection::default(), Cache::new(), CanvasLayout::new(&d, false));
+    let cx = ctx(&d, &s, &c, &l);
+    let mut t = create("rectangleFrame");
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Down, 10.0, 10.0));
+    // 172.35 pt square: 6.08 cm.
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Drag, 182.35, 182.35));
+    let texts: Vec<String> = t
+        .overlays(&cx)
+        .into_iter()
+        .filter_map(|o| match o {
+            Overlay::Measure { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["W: 6.08 cm\nH: 6.08 cm".to_string()]);
+}
+
+/// The Line tool's readout measures the line as drawn: Shift makes it level, so it has no
+/// height, wherever the pointer is.
+#[test]
+fn line_tool_readout_measures_the_line_as_drawn() {
+    let mut d = Document::new(&NewDocument::default());
+    d.settings.horizontal_units = Unit::Centimeters;
+    d.settings.vertical_units = Unit::Centimeters;
+    let (s, c, l) = (Selection::default(), Cache::new(), CanvasLayout::new(&d, false));
+    let cx = ctx(&d, &s, &c, &l);
+    let mut t = create("line");
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Down, 10.0, 10.0));
+    let mut drag = PointerEvent::new(PointerKind::Drag, 182.35, 15.0);
+    drag.mods.shift = true;
+    t.pointer(&cx, &drag);
+    let texts: Vec<String> = t
+        .overlays(&cx)
+        .into_iter()
+        .filter_map(|o| match o {
+            Overlay::Measure { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert_eq!(texts[0], "W: 6.08 cm\nH: 0 cm", "level, as drawn, not 5 pt down to the pointer");
 }
 
 #[test]
@@ -191,6 +242,32 @@ fn gradient_tool_drag_sets_the_vector() {
         other => panic!("{other:?}"),
     }
     assert_eq!(t.pointer(&cx, &PointerEvent::new(PointerKind::Up, 220.0 + off.x, 153.0 + off.y)), vec![Action::Commit]);
+}
+
+#[test]
+fn gradient_tool_drag_follows_a_rotated_spread() {
+    let mut d = Document::new(&NewDocument::default());
+    let lid = d.default_layer();
+    d.add_text_frame(SpreadRef::Doc(0), Rect::new(100.0, 100.0, 300.0, 200.0), lid, "", ParaFormat::default()).unwrap();
+    Arc::make_mut(&mut d.spreads[0]).pages[0].view_rotation = 1;
+    let (s, c, l) = (Selection::default(), Cache::new(), CanvasLayout::new(&d, false));
+    let cx = ctx(&d, &s, &c, &l);
+    let start = l.to_canvas(SpreadRef::Doc(0), Point::new(150.0, 150.0));
+    let mut t = create("gradientSwatch");
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Down, start.x, start.y));
+    for shift in [false, true] {
+        let ev = PointerEvent::new(PointerKind::Drag, start.x + 100.0, start.y).with_mods(Mods { shift, ..Default::default() });
+        match &t.pointer(&cx, &ev)[0] {
+            Action::Preview(_, p) => {
+                let to: Vec<f64> = p["to"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+                let want = l.delta_to_spread(SpreadRef::Doc(0), Vec2::new(100.0, 0.0));
+                assert!((to[0] - (150.0 + want.x)).abs() < 1e-6 && (to[1] - (150.0 + want.y)).abs() < 1e-6, "{to:?} want {want:?}");
+                assert!((to[0] - 150.0).abs() > 1e-6 || (to[1] - 150.0).abs() > 1e-6);
+                assert!((to[0] - 150.0).abs() < 1e-6, "{to:?}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -1058,6 +1135,33 @@ fn double_click_on_a_port_breaks_its_link() {
     }
 }
 
+/// With the Type tool, a drag that starts in an empty rectangle draws a new text frame over it
+/// (the rectangle stays as it is), as InDesign's does; a click still turns the rectangle into a
+/// text frame with the caret in it.
+#[test]
+fn type_tool_drag_over_an_empty_frame_draws_a_new_text_frame() {
+    let mut d = Document::new(&NewDocument::default());
+    let id = add_rect(&mut d, Rect::new(100.0, 100.0, 300.0, 300.0));
+    let (s, c, l) = (Selection::default(), Cache::new(), CanvasLayout::new(&d, false));
+    let cx = ctx(&d, &s, &c, &l);
+    let off = l.xf(SpreadRef::Doc(0)).translation();
+    let at = |x: f64, y: f64| (x + off.x, y + off.y);
+    let mut t = create("type");
+    let (x, y) = at(120.0, 120.0);
+    assert!(t.pointer(&cx, &PointerEvent::new(PointerKind::Down, x, y)).is_empty());
+    let (x1, y1) = at(280.0, 200.0);
+    let a = t.pointer(&cx, &PointerEvent::new(PointerKind::Drag, x1, y1));
+    assert!(matches!(&a[..], [Action::Begin(_), Action::Preview(cmd, p)] if cmd == "frame.create" && p["content"] == "text"), "{a:?}");
+    assert_eq!(t.pointer(&cx, &PointerEvent::new(PointerKind::Up, x1, y1)), vec![Action::Commit]);
+    // A click: the caret goes into the rectangle, which becomes a text frame.
+    assert!(t.pointer(&cx, &PointerEvent::new(PointerKind::Down, x, y)).is_empty());
+    let a = t.pointer(&cx, &PointerEvent::new(PointerKind::Up, x, y));
+    assert!(matches!(&a[..], [Action::Exec(cmd, p)] if cmd == "text.placeCaret" && p["frame"] == id.0), "{a:?}");
+    // A release away from the press with no drag in between isn't a click: no caret, no conversion.
+    assert!(t.pointer(&cx, &PointerEvent::new(PointerKind::Down, x, y)).is_empty());
+    assert!(t.pointer(&cx, &PointerEvent::new(PointerKind::Up, x1, y1)).is_empty());
+}
+
 #[test]
 fn clicks_in_a_row_edit_and_select_text() {
     let mut d = Document::new(&NewDocument::default());
@@ -1108,6 +1212,7 @@ fn graphic_frame(doc: &mut Document) -> ItemId {
     let id = ItemId(doc.alloc());
     let mut item = Item::new(id, doc.default_layer(), Shape::Rectangle, shapes::rectangle(Rect::new(100.0, 100.0, 200.0, 200.0)));
     item.content = designcraft_doc::Content::Graphic(designcraft_doc::Graphic {
+        layer_options: None,
         asset: designcraft_doc::AssetId(1),
         size: (200.0, 100.0),
         xf: designcraft_geom::Affine::translate((50.0, 100.0)),
@@ -1452,6 +1557,32 @@ fn table_frame(degrees: f64) -> (Document, ItemId) {
     (d, id)
 }
 
+/// In a table cell Shift+Tab goes back a cell and Esc toggles cell selection, as InDesign; out of
+/// a table Tab types a tab and Esc leaves the text.
+#[test]
+fn type_tool_keys_in_a_table_cell() {
+    let (d, id) = table_frame(0.0);
+    let sid = d.item(id).unwrap().text_frame().unwrap().story;
+    let table = *d.story(sid).unwrap().tables.keys().next().unwrap();
+    let (c, l) = (Cache::new(), CanvasLayout::new(&d, false));
+    let cell = designcraft_doc::CellAddr { table, row: 1, col: 1 };
+    let s = Selection::text(designcraft_doc::TextSel { cell: Some(cell), ..designcraft_doc::TextSel::caret(sid, 0) });
+    let cx = ctx(&d, &s, &c, &l);
+    let mut t = create("type");
+    let shift = Mods { shift: true, ..Default::default() };
+    let exec = |c: &str, p: serde_json::Value| vec![Action::Exec(c.into(), p)];
+    assert_eq!(t.key(&cx, ToolKey::Tab, shift), exec("table.prevCell", serde_json::json!({})));
+    assert_eq!(t.key(&cx, ToolKey::Tab, Mods::default()), exec("text.insert", serde_json::json!({"text": "\t"})));
+    assert_eq!(t.key(&cx, ToolKey::Escape, Mods::default()), exec("table.toggleSelection", serde_json::json!({})));
+    // Out of a table, and in footnote text (addressed as a cell too).
+    for cell in [None, Some(designcraft_doc::CellAddr::footnote(1))] {
+        let s = Selection::text(designcraft_doc::TextSel { cell, ..designcraft_doc::TextSel::caret(sid, 0) });
+        let cx = ctx(&d, &s, &c, &l);
+        assert_eq!(t.key(&cx, ToolKey::Tab, shift), exec("text.insert", serde_json::json!({"text": "\t"})), "{cell:?}");
+        assert!(matches!(t.key(&cx, ToolKey::Escape, Mods::default()).first(), Some(Action::SwitchTool(_))), "{cell:?}");
+    }
+}
+
 #[test]
 fn type_tool_drags_a_table_column_border() {
     for degrees in [0.0, 90.0] {
@@ -1502,6 +1633,7 @@ fn eyedropper_samples_a_placed_image_and_matches_other_objects() {
     let photo = ItemId(d.alloc());
     let mut it = Item::new(photo, lid, Shape::Rectangle, shapes::rectangle(Rect::new(100.0, 100.0, 200.0, 200.0)));
     it.content = designcraft_doc::Content::Graphic(designcraft_doc::Graphic {
+        layer_options: None,
         asset: designcraft_doc::AssetId(1),
         size: (100.0, 100.0),
         xf: designcraft_geom::Affine::translate((0.0, 0.0)),
@@ -1855,6 +1987,7 @@ fn eyedropper_ignores_inactive_states_of_a_multi_state_object() {
     let raster = {
         let mut it = Item::new(ItemId(d.alloc()), lid, Shape::Rectangle, shapes::rectangle(area));
         it.content = Content::Graphic(Graphic {
+            layer_options: None,
             asset: AssetId(1),
             size: (100.0, 100.0),
             xf: designcraft_geom::Affine::translate((0.0, 0.0)),
@@ -1935,4 +2068,51 @@ fn loaded_text_cursor_threads_into_a_frame_inside_a_group() {
     let q = td2.at(650.0, 350.0);
     assert_eq!(cx2.hit_text_frame(q).map(|(_, i)| i), None, "no text frame in that group");
     assert_eq!(t2.cursor(&cx2, q, Mods::default()), Cursor::NotAllowed);
+}
+
+#[test]
+fn direct_selection_click_on_one_of_several_selected_frames_selects_only_it() {
+    let mut d = Document::new(&NewDocument::default());
+    let a = add_rect(&mut d, Rect::new(100.0, 100.0, 200.0, 200.0));
+    let b = add_rect(&mut d, Rect::new(300.0, 100.0, 400.0, 200.0));
+    let (s, c, l) = (Selection::items(vec![a, b]), Cache::new(), CanvasLayout::new(&d, false));
+    let cx = ctx(&d, &s, &c, &l);
+    let p = spread_pt(&l, 150.0, 150.0);
+    let mut t = create("directSelection");
+    let acts = t.pointer(&cx, &PointerEvent::new(PointerKind::Down, p.x, p.y));
+    assert_eq!(acts, vec![Action::Exec("selection.set".into(), serde_json::json!({"ids": [a.0], "content": true}))]);
+}
+
+#[test]
+fn pulling_a_corner_of_an_unselected_frame_selects_the_frame_not_its_content() {
+    let mut d = Document::new(&NewDocument::default());
+    let a = add_rect(&mut d, Rect::new(100.0, 100.0, 200.0, 200.0));
+    let (s, c, l) = (Selection::default(), Cache::new(), CanvasLayout::new(&d, false));
+    let cx = ctx(&d, &s, &c, &l);
+    let p = spread_pt(&l, 200.0, 100.0);
+    let mut t = create("directSelection");
+    let acts = t.pointer(&cx, &PointerEvent::new(PointerKind::Down, p.x, p.y));
+    assert_eq!(
+        acts,
+        vec![Action::Exec("selection.set".into(), serde_json::json!({"ids": [a.0], "content": false})), Action::Begin("Move Anchor".into())]
+    );
+}
+
+#[test]
+fn anchor_drag_on_a_rotated_spread_sends_a_spread_space_delta() {
+    let mut d = Document::new(&NewDocument::default());
+    let a = add_rect(&mut d, Rect::new(100.0, 100.0, 200.0, 200.0));
+    Arc::make_mut(&mut d.spreads[0]).pages[0].view_rotation = 1;
+    let (s, c, l) = (Selection::items(vec![a]), Cache::new(), CanvasLayout::new(&d, false));
+    let cx = ctx(&d, &s, &c, &l);
+    let p = l.to_canvas(SpreadRef::Doc(0), Point::new(200.0, 100.0));
+    let mut t = create("directSelection");
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Down, p.x, p.y));
+    let acts = t.pointer(&cx, &PointerEvent::new(PointerKind::Drag, p.x + 50.0, p.y));
+    let [Action::Preview(cmd, params)] = acts.as_slice() else { panic!("{acts:?}") };
+    assert_eq!(cmd, "path.moveAnchors");
+    let want = l.delta_to_spread(SpreadRef::Doc(0), Vec2::new(50.0, 0.0));
+    assert!(want.y.abs() > 1.0, "the view rotation turns a canvas x move into a spread y move: {want:?}");
+    let (dx, dy) = (params["dx"].as_f64().unwrap(), params["dy"].as_f64().unwrap());
+    assert!((dx - want.x).abs() < 1e-6 && (dy - want.y).abs() < 1e-6, "{params} want {want:?}");
 }

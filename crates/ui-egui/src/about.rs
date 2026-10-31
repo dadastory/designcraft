@@ -1,24 +1,17 @@
-//! Native version and contributor credits for the embedded layout editor.
-
-use egui::{Color32, Rect, pos2, vec2};
+//! About DesignCraft, contributors and model credits.
 
 use crate::DesignApp;
 use crate::theme::{Tokens, semibold};
+use egui::{Rect, pos2, vec2};
 
-/// ArtCraft brand blue (from `docs/brand/artcraft-mark.svg`).
-pub const BRAND: Color32 = Color32::from_rgb(0x4e, 0x7b, 0xfb);
-/// The About window's tabs, in `UiState::about_tab` order (`help.about {tab}` names them in lowercase).
 pub const ABOUT_TABS: [&str; 3] = ["About", "Contributors", "Models"];
-
-/// Paint the ArtCraft mark into `rect` (square), rasterised once per size and cached.
-pub fn paint_mark(_ui: &egui::Ui, _rect: Rect, _color: Color32) {}
 
 pub fn show(app: &mut DesignApp, ctx: &egui::Context) {
     if !app.ui.about {
         return;
     }
     let t = Tokens::get(ctx);
-    let area = egui::Id::new("about");
+    let area = egui::Id::unique("about");
     let instance = area.with("placement");
     let resp = crate::modal_drag::modal(ctx, area, instance).show(ctx, |ui| {
         ui.set_width(if app.ui.about_tab == 0 { 460.0 } else { 640.0 });

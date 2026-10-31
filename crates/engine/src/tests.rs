@@ -2,6 +2,15 @@ use serde_json::json;
 
 use super::*;
 
+mod autosize;
+mod file_guard;
+mod idml;
+mod ime;
+mod linked_paths;
+mod params;
+mod roots;
+mod table;
+
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", &json!({"pages": 2})).unwrap();
@@ -868,6 +877,9 @@ fn custom_wrap_path_follows_resize_and_yields_to_offsets() {
     s.execute("transform.resize", &json!({"from": [b.x0, b.y0, b.x1, b.y1], "to": to})).unwrap();
     let w = wrap_path(&s).unwrap().bounds().unwrap();
     assert!((w.width() - 80.0).abs() < 1e-6 && (w.height() - 100.0).abs() < 1e-6, "{w:?}");
+    // Offsets that are all null change nothing, so the boundary stays.
+    s.execute("object.textWrap", &json!({"mode": null, "offset": [null, null, null, null]})).unwrap();
+    assert!(wrap_path(&s).is_some(), "an all-null offset keeps the custom boundary");
     // An offset rebuilds the wrap from the frame.
     s.execute("object.textWrap", &json!({"offset": 6})).unwrap();
     assert_eq!(wrap_path(&s), None);
@@ -1650,4 +1662,237 @@ fn a_line_fits_when_its_baseline_does() {
     // descent (about 25 pt more) doesn't.
     assert!(!overset(&mut s, 78.5), "the line is set; its descenders hang below the frame");
     assert!(overset(&mut s, 50.0), "a baseline below the frame still oversets the line");
+}
+
+/// Reset To Base with a new Based On: a partial rule edit resolves over the new parent, not the
+/// old one.
+#[test]
+fn reset_to_base_with_a_new_parent_resolves_rule_edits_over_it() {
+    let mut s = session();
+    let rule = |weight: f64, offset: f64| json!({"on": true, "weight": weight, "color": "[Black]", "offset": offset});
+    s.execute("style.paragraph.create", &json!({"name": "Old", "para": {"ruleBelow": rule(3.0, 1.0)}})).unwrap();
+    s.execute("style.paragraph.create", &json!({"name": "New", "para": {"ruleBelow": rule(1.0, 9.0)}})).unwrap();
+    s.execute("style.paragraph.create", &json!({"name": "Child", "basedOn": "Old"})).unwrap();
+    s.execute("style.paragraph.edit", &json!({"name": "Child", "resetToBase": true, "basedOn": "New", "para": {"ruleBelow": {"weight": 2}}}))
+        .unwrap();
+    let r = s.doc().unwrap().doc.styles.resolve_para_style("Child").0.rule_below;
+    assert_eq!((r.weight, r.offset), (2.0, 9.0), "the offset is the new parent's");
+}
+
+/// Paragraph style references are checked: a Based On or Next Style that names no style, or
+/// that isn't a name or null, is refused and changes nothing.
+#[test]
+fn paragraph_style_references_must_name_styles() {
+    let mut s = session();
+    s.execute("style.paragraph.create", &json!({"name": "Body"})).unwrap();
+    assert!(s.execute("style.paragraph.create", &json!({"name": "Lost", "nextStyle": "Nowhere"})).is_err());
+    assert!(s.doc().unwrap().doc.styles.para("Lost").is_none());
+    // On creation too, a reference that isn't a name or null is refused, not dropped.
+    for p in [json!({"name": "Lost", "nextStyle": true}), json!({"name": "Lost", "basedOn": 3})] {
+        assert!(s.execute("style.paragraph.create", &p).is_err(), "{p}");
+        assert!(s.doc().unwrap().doc.styles.para("Lost").is_none(), "{p}");
+    }
+    assert!(s.execute("style.character.create", &json!({"name": "Lost", "basedOn": ["Body"]})).is_err());
+    assert!(s.doc().unwrap().doc.styles.char_style("Lost").is_none());
+    s.execute("style.paragraph.create", &json!({"name": "Self", "nextStyle": "Self"})).unwrap();
+    let before = s.doc().unwrap().doc.clone();
+    for p in [json!({"name": "Body", "basedOn": "Nowhere"}), json!({"name": "Body", "basedOn": 3}), json!({"name": "Body", "nextStyle": true})] {
+        assert!(s.execute("style.paragraph.edit", &p).is_err(), "{p}");
+    }
+    assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().doc), "nothing changed");
+    s.execute("style.paragraph.edit", &json!({"name": "Body", "basedOn": null, "nextStyle": "Self"})).unwrap();
+}
+
+#[test]
+fn direct_selection_pulls_one_corner_of_an_unselected_frame() {
+    // Chris Nielsen's "The Adobe InDesign Toolbox" (10:10): with the White Arrow, click outside,
+    // then press on a frame's corner and pull it: only that corner moves (a triangle, nearly).
+    use designcraft_tools::{PointerEvent, PointerKind, SnapView};
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 612, "height": 792, "facingPages": false})).unwrap();
+    let id = s.execute("frame.create", &json!({"rect": [156, 219, 455, 569], "content": "graphic"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("edit.deselectAll", &json!({})).unwrap();
+    let corners = |s: &Session| {
+        let d = &s.doc().unwrap().doc;
+        let it = d.item(designcraft_doc::ItemId(id)).unwrap();
+        it.path.subpaths[0].anchors.iter().map(|a| it.xf * a.p).collect::<Vec<_>>()
+    };
+    let before = corners(&s);
+    s.set_tool("directSelection");
+    let v = ViewInfo { snap: SnapView::OFF, ..ViewInfo::at_zoom(1.0) };
+    let layout = s.layout();
+    let at = |x: f64, y: f64| layout.to_canvas(designcraft_doc::SpreadRef::Doc(0), designcraft_geom::Point::new(x, y));
+    let (a, b) = (at(455.0, 219.0), at(455.0, 150.0));
+    s.pointer(&PointerEvent::new(PointerKind::Down, a.x, a.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, a.x, a.y - 30.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, b.x, b.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, b.x, b.y), v).unwrap();
+    let after = corners(&s);
+    let moved: Vec<_> = before.iter().zip(&after).filter(|(p, q)| (**p - **q).hypot() > 1e-6).collect();
+    assert_eq!(moved.len(), 1, "one corner moved: {before:?} → {after:?}");
+    assert!((*moved[0].1 - designcraft_geom::Point::new(455.0, 150.0)).hypot() < 1e-6, "{after:?}");
+    assert_eq!(s.doc().unwrap().selection.items, [designcraft_doc::ItemId(id)], "the frame is selected");
+    // One undo step puts the corner back.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(corners(&s), before);
+    // Away from its corners, the White Arrow still drags the whole unselected frame.
+    s.execute("edit.deselectAll", &json!({})).unwrap();
+    let (c, d) = (at(300.0, 219.0), at(300.0, 269.0));
+    s.pointer(&PointerEvent::new(PointerKind::Down, c.x, c.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, c.x, c.y + 20.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, d.x, d.y), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, d.x, d.y), v).unwrap();
+    assert!(corners(&s).iter().zip(&before).all(|(p, q)| (p.y - q.y - 50.0).abs() < 1e-6), "{:?}", corners(&s));
+}
+
+#[test]
+fn direct_selection_on_a_selected_frame_deletes_only_its_image() {
+    use designcraft_tools::{Mods, PointerEvent, PointerKind, ToolKey};
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("photo.png");
+    std::fs::write(&png, designcraft_render::Rendered { width: 100, height: 100, pixels: vec![40u8; 100 * 100 * 4] }.to_png()).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    let frame = s.execute("frame.create", &json!({"rect": [100, 100, 200, 200]})).unwrap()["id"].as_u64().unwrap();
+    s.execute("file.place", &json!({"path": png.to_string_lossy(), "frame": frame})).unwrap();
+    s.execute("selection.set", &json!({"ids": [frame], "content": false})).unwrap();
+    let v = ViewInfo::at_zoom(1.0);
+    let click = |s: &mut Session| {
+        s.pointer(&PointerEvent::new(PointerKind::Down, 110.0, 150.0), v).unwrap();
+        s.pointer(&PointerEvent::new(PointerKind::Up, 110.0, 150.0), v).unwrap();
+    };
+    // The frame is selected with the Selection tool, then the image is clicked with Direct Selection.
+    s.set_tool("selection");
+    click(&mut s);
+    assert!(!s.doc().unwrap().selection.content);
+    s.set_tool("directSelection");
+    click(&mut s);
+    assert!(s.doc().unwrap().selection.content, "Direct Selection selects the image inside the selected frame");
+    assert!(s.tool_key(ToolKey::Delete, Mods::default(), v).unwrap());
+    let st = s.doc().unwrap();
+    let it = st.doc.item(designcraft_doc::ItemId(frame)).expect("the frame stays");
+    assert!(matches!(it.content, designcraft_doc::Content::Unassigned), "{:?}", it.content);
+    assert_eq!(st.selection.items, vec![designcraft_doc::ItemId(frame)]);
+    // A frame holding pasted-in items: the click selects them too, so arrow keys move them.
+    let inner = s.execute("frame.create", &json!({"rect": [320, 120, 360, 160]})).unwrap()["id"].as_u64().unwrap();
+    s.execute("selection.set", &json!({"ids": [inner]})).unwrap();
+    s.execute("edit.cut", &json!({})).unwrap();
+    let holder = s.execute("frame.create", &json!({"rect": [300, 100, 400, 200]})).unwrap()["id"].as_u64().unwrap();
+    s.execute("selection.set", &json!({"ids": [holder]})).unwrap();
+    s.execute("edit.pasteInto", &json!({})).unwrap();
+    s.set_tool("selection");
+    s.pointer(&PointerEvent::new(PointerKind::Down, 340.0, 140.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, 340.0, 140.0), v).unwrap();
+    assert_eq!(s.doc().unwrap().selection.items, vec![designcraft_doc::ItemId(holder)]);
+    assert!(!s.doc().unwrap().selection.content);
+    s.set_tool("directSelection");
+    s.pointer(&PointerEvent::new(PointerKind::Down, 340.0, 140.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, 340.0, 140.0), v).unwrap();
+    let st = s.doc().unwrap();
+    assert!(st.selection.content && st.selection.items == [designcraft_doc::ItemId(holder)], "the pasted-in items are selected: {:?}", st.selection);
+}
+
+/// Issue #1637: with several objects selected, a click on one of them (no drag) makes it the key
+/// object, and Align to Key Object leaves it in place. A second click on it drops the key.
+#[test]
+fn a_click_in_the_selection_makes_the_key_object() {
+    use designcraft_tools::{PointerEvent, PointerKind};
+    let mut s = session();
+    let a = s.execute("frame.create", &json!({"rect": [50.0, 100.0, 100.0, 150.0], "content": "unassigned"})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("frame.create", &json!({"rect": [200.0, 120.0, 300.0, 170.0], "content": "unassigned"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("selection.set", &json!({"ids": [a, b]})).unwrap();
+    s.set_tool("selection");
+    let v = ViewInfo::at_zoom(1.0);
+    // On the part of the key object that the aligned object never covers, away from the handles.
+    let click = |s: &mut Session| {
+        s.pointer(&PointerEvent::new(PointerKind::Down, 280.0, 160.0), v).unwrap();
+        s.pointer(&PointerEvent::new(PointerKind::Up, 280.0, 160.0), v).unwrap();
+    };
+    click(&mut s);
+    assert_eq!(s.doc().unwrap().selection.items.len(), 2, "the click keeps both selected");
+    // The key is the right-hand object, so aligning left edges to the selection would move it.
+    s.execute("object.align", &json!({"edge": "left", "to": "keyObject"})).unwrap();
+    let x0 = |s: &Session, id: u64| s.doc().unwrap().doc.item(designcraft_doc::ItemId(id)).unwrap().bounds().x0;
+    assert!((x0(&s, b) - 200.0).abs() < 1e-6, "the key object moved to {}", x0(&s, b));
+    assert!((x0(&s, a) - 200.0).abs() < 1e-6, "the other object is at {}", x0(&s, a));
+    // The Align panel and the Control panel send no target: the key object is the default one.
+    s.execute("object.align", &json!({"edge": "top"})).unwrap();
+    let y0 = |s: &Session, id: u64| s.doc().unwrap().doc.item(designcraft_doc::ItemId(id)).unwrap().bounds().y0;
+    assert!((y0(&s, b) - 120.0).abs() < 1e-6, "the key object moved to {}", y0(&s, b));
+    assert!((y0(&s, a) - 120.0).abs() < 1e-6, "the other object is at {}", y0(&s, a));
+    click(&mut s);
+    assert_eq!(s.doc().unwrap().selection.key, None, "a click on the key object drops the key");
+}
+
+/// Dragging one of several selected objects moves them all and makes no key object.
+#[test]
+fn dragging_the_selection_makes_no_key_object() {
+    use designcraft_tools::{PointerEvent, PointerKind};
+    let mut s = session();
+    let a = s.execute("frame.create", &json!({"rect": [50.0, 100.0, 100.0, 150.0], "content": "unassigned"})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("frame.create", &json!({"rect": [200.0, 100.0, 260.0, 150.0], "content": "unassigned"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("selection.set", &json!({"ids": [a, b]})).unwrap();
+    s.set_tool("selection");
+    let v = ViewInfo::at_zoom(1.0);
+    s.pointer(&PointerEvent::new(PointerKind::Down, 230.0, 125.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, 250.0, 135.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, 250.0, 135.0), v).unwrap();
+    assert_eq!(s.doc().unwrap().selection.key, None);
+}
+
+/// Shift-clicking the key object out of the selection drops the key.
+#[test]
+fn deselecting_the_key_object_drops_the_key() {
+    let mut s = session();
+    let a = s.execute("frame.create", &json!({"rect": [50.0, 100.0, 100.0, 150.0]})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("frame.create", &json!({"rect": [200.0, 100.0, 260.0, 150.0]})).unwrap()["id"].as_u64().unwrap();
+    s.execute("selection.set", &json!({"ids": [a, b]})).unwrap();
+    s.execute("selection.key", &json!({"id": b})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.key, Some(designcraft_doc::ItemId(b)));
+    s.execute("selection.toggle", &json!({"id": b})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.key, None);
+}
+
+/// A key object needs another object to align to: with one object selected there is nothing to key
+/// against, and the stored key would turn that object into the target as soon as a second one joins.
+#[test]
+fn a_single_selected_object_cannot_be_the_key_object() {
+    let mut s = session();
+    let a = s.execute("frame.create", &json!({"rect": [50.0, 100.0, 100.0, 150.0]})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("frame.create", &json!({"rect": [200.0, 120.0, 300.0, 170.0]})).unwrap()["id"].as_u64().unwrap();
+    s.execute("selection.set", &json!({"ids": [a]})).unwrap();
+    assert!(s.execute("selection.key", &json!({"id": a})).is_err());
+    assert_eq!(s.doc().unwrap().selection.key, None);
+    s.execute("selection.toggle", &json!({"id": b})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.key, None, "the second object joining must not find a key already set");
+}
+
+/// With the selection down to the key object alone, Align no longer has a key object: a single
+/// object aligns to the page, as before.
+#[test]
+fn a_lone_key_object_aligns_to_the_page() {
+    let mut s = session();
+    let a = s.execute("frame.create", &json!({"rect": [50.0, 100.0, 100.0, 150.0]})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("frame.create", &json!({"rect": [200.0, 120.0, 300.0, 170.0]})).unwrap()["id"].as_u64().unwrap();
+    s.execute("selection.set", &json!({"ids": [a, b]})).unwrap();
+    s.execute("selection.key", &json!({"id": b})).unwrap();
+    s.execute("selection.toggle", &json!({"id": a})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.key, None);
+    s.execute("object.align", &json!({"edge": "left"})).unwrap();
+    let x0 = s.doc().unwrap().doc.item(designcraft_doc::ItemId(b)).unwrap().bounds().x0;
+    assert!(x0.abs() < 1e-6, "the object is at {x0}, not at the page's left edge");
+}
+
+/// Aligning one object alone (`ids`) while it is the key object of a larger selection also takes
+/// the page.
+#[test]
+fn aligning_the_key_object_alone_takes_the_page() {
+    let mut s = session();
+    let a = s.execute("frame.create", &json!({"rect": [50.0, 100.0, 100.0, 150.0]})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("frame.create", &json!({"rect": [200.0, 120.0, 300.0, 170.0]})).unwrap()["id"].as_u64().unwrap();
+    s.execute("selection.set", &json!({"ids": [a, b]})).unwrap();
+    s.execute("selection.key", &json!({"id": b})).unwrap();
+    s.execute("object.align", &json!({"edge": "left", "ids": [b]})).unwrap();
+    let x0 = s.doc().unwrap().doc.item(designcraft_doc::ItemId(b)).unwrap().bounds().x0;
+    assert!(x0.abs() < 1e-6, "the object is at {x0}, not at the page's left edge");
 }
